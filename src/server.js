@@ -345,8 +345,13 @@ GIT:
 ANALYSIS:
 - code_stats — lines of code, languages, file counts
 - dependency_graph — parse package.json/go.mod/Cargo.toml/requirements.txt
-- security_scan — find hardcoded secrets, injection risks, insecure patterns
+- security_scan — quick regex-based security check
 - compare_repos — structural diff between two repos
+
+SECURITY (White-Hat):
+- deep_security_scan — OWASP Top 10 scan (AST-based with semgrep, or enhanced regex fallback). Finds injection, XSS, auth bypass, crypto failures, SSRF
+- dependency_audit — scan deps for known CVEs (npm audit, pip-audit, cargo audit, govulncheck)
+- secrets_scan — find leaked API keys, tokens, passwords in code + git history (gitleaks or entropy analysis)
 
 DEEP UNDERSTANDING:
 - repo_summary — comprehensive repo overview (README + structure + deps + stats)
@@ -361,7 +366,9 @@ STRATEGY:
 3. For architecture: knowledge_graph depth=3 for deep analysis
 4. For security: security_scan then read_file on flagged files
 5. Be specific: name files, line numbers. Use targeted regex patterns.
-6. Chain tools: search → read → analyze. Don't stop at search results.` }
+6. Chain tools: search → read → analyze. Don't stop at search results.
+7. For security reviews: deep_security_scan → dependency_audit → secrets_scan → read_file on flagged files
+8. Compare models: use different models on the same security scan to find what each catches` }
   ];
   try { if (history) { const h = Array.isArray(history) ? history : JSON.parse(history); conversationHistory.push(...h); } } catch {}
   conversationHistory.push({ role: 'user', content: message });

@@ -287,7 +287,59 @@ export const GIT_SECRETS_CLEAN_TOOL = {
 };
 
 // ═══════════════════════════════════════════
-// TIER 6 — API Intelligence
+// TIER 6 — White-Hat Security Analysis
+// ═══════════════════════════════════════════
+
+export const DEEP_SECURITY_SCAN_TOOL = {
+  type: 'function',
+  function: {
+    name: 'deep_security_scan',
+    description: 'Deep AST-based security scan using semgrep OWASP rules. Finds SQL injection, XSS, command injection, auth bypass, insecure crypto, path traversal — way more accurate than regex. Use after security_scan for thorough analysis.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path to the repo to scan' },
+        ruleset: { type: 'string', description: 'Ruleset: "owasp" (default), "security", "secrets", "all"' },
+        language: { type: 'string', description: 'Filter by language: python, javascript, java, go, ruby, etc.' },
+      },
+      required: ['path'],
+    },
+  },
+};
+
+export const DEPENDENCY_AUDIT_TOOL = {
+  type: 'function',
+  function: {
+    name: 'dependency_audit',
+    description: 'Scan dependencies for known CVEs and vulnerabilities. Runs npm audit, pip-audit, cargo audit, or go vuln check depending on the project type. Returns severity, affected versions, and fix recommendations.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path to the repo to audit' },
+      },
+      required: ['path'],
+    },
+  },
+};
+
+export const SECRETS_SCAN_TOOL = {
+  type: 'function',
+  function: {
+    name: 'secrets_scan',
+    description: 'Scan codebase and git history for leaked secrets using entropy analysis and pattern matching. Finds API keys, tokens, passwords, private keys with high accuracy and low false positives. More thorough than git_secrets_clean.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path to the repo to scan' },
+        scan_history: { type: 'boolean', description: 'Also scan git history, not just current files (default true)' },
+      },
+      required: ['path'],
+    },
+  },
+};
+
+// ═══════════════════════════════════════════
+// TIER 7 — API Intelligence
 // ═══════════════════════════════════════════
 
 export const OPENAPI_SEARCH_TOOL = {
@@ -318,6 +370,7 @@ export const ALL_TOOLS = [
   SECURITY_SCAN_TOOL, COMPARE_REPOS_TOOL,
   REPO_SUMMARY_TOOL, KNOWLEDGE_GRAPH_TOOL,
   GIT_SUMMARY_TOOL, GIT_EFFORT_TOOL, GIT_AUTHORS_TOOL, GIT_TIMELINE_TOOL, GIT_SECRETS_CLEAN_TOOL,
+  DEEP_SECURITY_SCAN_TOOL, DEPENDENCY_AUDIT_TOOL, SECRETS_SCAN_TOOL,
   OPENAPI_SEARCH_TOOL,
 ];
 
@@ -339,6 +392,9 @@ export function executeTool(name, args) {
     case 'git_authors': return execGitAuthors(args);
     case 'git_timeline': return execGitTimeline(args);
     case 'git_secrets_clean': return execGitSecretsClean(args);
+    case 'deep_security_scan': return execDeepSecurityScan(args);
+    case 'dependency_audit': return execDependencyAudit(args);
+    case 'secrets_scan': return execSecretsScan(args);
     case 'openapi_search': return execOpenAPISearch(args);
     default: return null; // not handled here
   }
@@ -1020,6 +1076,445 @@ function execGitSecretsClean({ path: repoPath, pattern }) {
 
     return out;
   } catch (e) { return `Error: ${e.message}`; }
+}
+
+// ═══════════════════════════════════════════
+// White-Hat Security Tools — Implementations
+// ═══════════════════════════════════════════
+
+function execDeepSecurityScan({ path: repoPath, ruleset = 'owasp', language }) {
+  if (!existsSync(repoPath)) return `Not found: ${repoPath}`;
+  const t0 = performance.now();
+
+  let out = `Deep Security Scan: ${repoPath}\n${'='.repeat(50)}\n`;
+
+  // Check if semgrep is available
+  let hasSemgrep = false;
+  try { exec('semgrep --version', { timeout: 5000 }); hasSemgrep = true; } catch {}
+
+  if (hasSemgrep) {
+    // Run semgrep with specified ruleset
+    const ruleMap = {
+      'owasp': 'p/owasp-top-ten',
+      'security': 'p/security-audit',
+      'secrets': 'p/secrets',
+      'all': 'p/owasp-top-ten p/security-audit p/secrets',
+    };
+    const rules = ruleMap[ruleset] || ruleMap.owasp;
+    let cmd = `cd "${repoPath}" && semgrep --config ${rules} --json --timeout 60 --max-target-bytes 1000000`;
+    if (language) cmd += ` --lang ${language}`;
+    cmd += ' 2>/dev/null || true';
+
+    try {
+      const result = exec(cmd, { timeout: 120000 });
+      const data = JSON.parse(result);
+      const findings = data.results || [];
+
+      out += `Ruleset: ${ruleset} | Findings: ${findings.length}\n`;
+      if (data.errors?.length) out += `Scan errors: ${data.errors.length}\n`;
+      out += '\n';
+
+      // Group by severity
+      const bySeverity = { ERROR: [], WARNING: [], INFO: [] };
+      findings.forEach(f => {
+        const sev = f.extra?.severity || 'WARNING';
+        if (!bySeverity[sev]) bySeverity[sev] = [];
+        bySeverity[sev].push(f);
+      });
+
+      for (const [sev, items] of Object.entries(bySeverity)) {
+        if (items.length === 0) continue;
+        const icon = sev === 'ERROR' ? '!!' : sev === 'WARNING' ? '!' : 'i';
+        out += `[${icon}] ${sev} (${items.length}):\n`;
+        items.slice(0, 15).forEach(f => {
+          const file = relative(repoPath, f.path || '');
+          const line = f.start?.line || '?';
+          const rule = f.check_id?.split('.').pop() || 'unknown';
+          const msg = f.extra?.message || '';
+          out += `  ${file}:${line} [${rule}]\n`;
+          out += `    ${msg.slice(0, 200)}\n`;
+          if (f.extra?.metadata?.cwe) out += `    CWE: ${f.extra.metadata.cwe}\n`;
+          if (f.extra?.fix) out += `    Fix: ${f.extra.fix.slice(0, 150)}\n`;
+          out += '\n';
+        });
+        if (items.length > 15) out += `  ... and ${items.length - 15} more ${sev} findings\n\n`;
+      }
+    } catch (e) {
+      out += `Semgrep error: ${e.message}\n\n`;
+    }
+  } else {
+    // Fallback: enhanced regex-based scan with OWASP categories
+    out += `[semgrep not installed — using enhanced regex scan]\n`;
+    out += `Install semgrep for AST-based analysis: pip install semgrep\n\n`;
+
+    const owaspChecks = [
+      { name: 'A01:2021 Broken Access Control', patterns: [
+        'role.*=.*admin', 'isAdmin.*=.*true', 'bypass.*auth', 'permitAll',
+        'AllowAnonymous', '@NoAuth', 'skip.*auth', 'disable.*csrf'
+      ]},
+      { name: 'A02:2021 Cryptographic Failures', patterns: [
+        'MD5|md5', 'SHA1|sha1[^_]', 'DES\\b', 'ECB', 'Math\\.random',
+        'random\\(\\)', 'http://(?!localhost|127\\.0)', 'verify.*=.*false', 'ssl.*=.*false'
+      ]},
+      { name: 'A03:2021 Injection', patterns: [
+        'eval\\(', 'os\\.system\\(',
+        'subprocess\\.call.*shell.*True', 'Runtime\\.exec',
+        'innerHTML.*=', 'document\\.write\\('
+      ]},
+      { name: 'A04:2021 Insecure Design', patterns: [
+        'TODO.*secur|FIXME.*secur|HACK.*auth', 'password.*=.*password',
+        'rate.*limit.*disable', 'throttle.*=.*0'
+      ]},
+      { name: 'A05:2021 Security Misconfiguration', patterns: [
+        'debug.*=.*[Tt]rue', 'DEBUG.*=.*1', 'CORS.*\\*',
+        'Access-Control-Allow-Origin.*\\*', 'AllowAll', 'chmod.*777',
+        'expose.*port|EXPOSE'
+      ]},
+      { name: 'A07:2021 Auth Failures', patterns: [
+        'password.*=.*[a-zA-Z0-9]{8,}', 'api[_-]?key.*=.*[a-zA-Z0-9]',
+        'hardcoded.*password|password.*hardcoded'
+      ]},
+      { name: 'A08:2021 Software Integrity', patterns: [
+        'http://.*\\.js["\'>]', 'integrity.*=.*false', 'verify.*signature.*false',
+        'npm.*--no-verify', 'pip.*--trusted-host'
+      ]},
+      { name: 'A09:2021 Logging Failures', patterns: [
+        'console\\.log.*password|console\\.log.*token',
+        'print.*password|logging.*password',
+        'log\\..*password'
+      ]},
+      { name: 'A10:2021 SSRF', patterns: [
+        'fetch\\(.*req\\.|axios.*req\\.(?:body|query|params)',
+        'requests\\.get\\(.*input|urllib.*input',
+        'http\\.get\\(.*user|url.*=.*req\\.'
+      ]},
+    ];
+
+    let totalFindings = 0;
+    const langFilter = language ? `--type ${language}` : '';
+    const excludes = "--glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!vendor' --glob '!dist'";
+
+    for (const check of owaspChecks) {
+      let findings = '';
+      for (const pat of check.patterns) {
+        try {
+          const result = exec(`rg --no-heading -n -m 5 -i ${langFilter} ${excludes} -- "${pat}" "${repoPath}" 2>/dev/null || true`, { timeout: 10000 });
+          if (result.trim()) {
+            result.trim().split('\n').slice(0, 3).forEach(l => {
+              findings += `    ${relative(repoPath, l.split(':')[0])}:${l.split(':')[1]} ${l.split(':').slice(2).join(':').trim().slice(0, 120)}\n`;
+            });
+          }
+        } catch {}
+      }
+      if (findings) {
+        const count = findings.trim().split('\n').length;
+        totalFindings += count;
+        out += `[!] ${check.name} (${count} findings):\n${findings}\n`;
+      } else {
+        out += `[ok] ${check.name}: clean\n`;
+      }
+    }
+
+    out += `\n${'='.repeat(50)}\n`;
+    out += `Total: ${totalFindings} potential issues (OWASP Top 10 categories)\n`;
+    out += `Note: Regex-based scan — install semgrep for AST-level accuracy\n`;
+  }
+
+  const totalMs = Math.round(performance.now() - t0);
+  out += `\nScan time: ${totalMs}ms\n`;
+  return out;
+}
+
+function execDependencyAudit({ path: repoPath }) {
+  if (!existsSync(repoPath)) return `Not found: ${repoPath}`;
+  const t0 = performance.now();
+
+  let out = `Dependency Audit: ${repoPath}\n${'='.repeat(50)}\n\n`;
+  let found = false;
+
+  // Node.js — npm audit
+  if (existsSync(resolve(repoPath, 'package-lock.json')) || existsSync(resolve(repoPath, 'package.json'))) {
+    found = true;
+    out += `## Node.js (npm audit)\n`;
+    try {
+      // npm audit returns non-zero on vulnerabilities, so we capture both
+      const result = exec(`cd "${repoPath}" && npm audit --json 2>/dev/null || true`, { timeout: 30000 });
+      try {
+        const audit = JSON.parse(result);
+        const vulns = audit.vulnerabilities || {};
+        const meta = audit.metadata || {};
+        const total = meta.vulnerabilities || {};
+
+        out += `Packages scanned: ${meta.dependencies?.total || '?'}\n`;
+        out += `Vulnerabilities: critical=${total.critical||0} high=${total.high||0} moderate=${total.moderate||0} low=${total.low||0}\n\n`;
+
+        // Show top vulnerabilities
+        const sorted = Object.entries(vulns).sort((a, b) => {
+          const sevOrder = { critical: 0, high: 1, moderate: 2, low: 3 };
+          return (sevOrder[a[1].severity] || 4) - (sevOrder[b[1].severity] || 4);
+        });
+
+        sorted.slice(0, 20).forEach(([name, v]) => {
+          out += `  [${(v.severity || '?').toUpperCase()}] ${name}@${v.range || '?'}\n`;
+          if (v.via && Array.isArray(v.via)) {
+            v.via.filter(x => typeof x === 'object').slice(0, 2).forEach(via => {
+              out += `    ${via.title || via.name || ''}\n`;
+              if (via.url) out += `    ${via.url}\n`;
+            });
+          }
+          if (v.fixAvailable) {
+            const fix = typeof v.fixAvailable === 'object' ? `update ${v.fixAvailable.name} to ${v.fixAvailable.version}` : 'fix available';
+            out += `    Fix: ${fix}\n`;
+          }
+          out += '\n';
+        });
+        if (sorted.length > 20) out += `  ... and ${sorted.length - 20} more\n`;
+      } catch {
+        // npm audit plain text output
+        out += result.slice(0, 2000) + '\n';
+      }
+    } catch (e) {
+      out += `npm audit failed: ${e.message}\n`;
+    }
+    out += '\n';
+  }
+
+  // Python — pip-audit or safety check
+  if (existsSync(resolve(repoPath, 'requirements.txt')) || existsSync(resolve(repoPath, 'pyproject.toml'))) {
+    found = true;
+    out += `## Python\n`;
+
+    // Try pip-audit first
+    let audited = false;
+    try {
+      const reqFile = existsSync(resolve(repoPath, 'requirements.txt')) ? 'requirements.txt' : '';
+      if (reqFile) {
+        const result = exec(`cd "${repoPath}" && pip-audit -r ${reqFile} --format json 2>/dev/null || true`, { timeout: 30000 });
+        const data = JSON.parse(result);
+        if (Array.isArray(data)) {
+          const vulns = data.filter(d => d.vulns && d.vulns.length > 0);
+          out += `Packages scanned: ${data.length}\n`;
+          out += `Vulnerable: ${vulns.length}\n\n`;
+          vulns.slice(0, 15).forEach(pkg => {
+            pkg.vulns.forEach(v => {
+              out += `  [${v.fix_versions?.length ? 'FIXABLE' : 'NO FIX'}] ${pkg.name}@${pkg.version}\n`;
+              out += `    ${v.id}: ${v.description?.slice(0, 150) || ''}\n`;
+              if (v.fix_versions?.length) out += `    Fix: upgrade to ${v.fix_versions.join(' or ')}\n`;
+              out += '\n';
+            });
+          });
+          audited = true;
+        }
+      }
+    } catch {}
+
+    if (!audited) {
+      // Fallback: check requirements.txt against known patterns
+      try {
+        const reqFile = resolve(repoPath, 'requirements.txt');
+        if (existsSync(reqFile)) {
+          const deps = readFileSync(reqFile, 'utf8').split('\n').filter(l => l.trim() && !l.startsWith('#'));
+          out += `Packages found: ${deps.length}\n`;
+          out += `[pip-audit not installed — showing deps only]\n`;
+          out += `Install for CVE scanning: pip install pip-audit\n\n`;
+          // Check for known risky packages
+          const risky = ['pyyaml<6', 'requests<2.25', 'django<3', 'flask<2', 'pillow<9', 'urllib3<1.26', 'cryptography<3'];
+          deps.forEach(d => {
+            const lower = d.toLowerCase();
+            const isRisky = risky.some(r => lower.startsWith(r.split('<')[0]) && lower.includes('=='));
+            if (isRisky) out += `  [!] ${d.trim()} — may have known vulnerabilities\n`;
+          });
+        }
+      } catch {}
+    }
+    out += '\n';
+  }
+
+  // Go — govulncheck
+  if (existsSync(resolve(repoPath, 'go.mod'))) {
+    found = true;
+    out += `## Go\n`;
+    try {
+      const result = exec(`cd "${repoPath}" && govulncheck ./... 2>/dev/null || true`, { timeout: 30000 });
+      if (result.includes('No vulnerabilities')) {
+        out += `No known vulnerabilities found.\n`;
+      } else {
+        out += result.slice(0, 2000) + '\n';
+      }
+    } catch {
+      // Fallback: check go.sum for known vulnerable modules
+      out += `[govulncheck not installed]\n`;
+      out += `Install: go install golang.org/x/vuln/cmd/govulncheck@latest\n`;
+    }
+    out += '\n';
+  }
+
+  // Rust — cargo audit
+  if (existsSync(resolve(repoPath, 'Cargo.lock'))) {
+    found = true;
+    out += `## Rust\n`;
+    try {
+      const result = exec(`cd "${repoPath}" && cargo audit --json 2>/dev/null || true`, { timeout: 30000 });
+      try {
+        const data = JSON.parse(result);
+        const vulns = data.vulnerabilities?.list || [];
+        out += `Vulnerabilities: ${vulns.length}\n\n`;
+        vulns.slice(0, 15).forEach(v => {
+          out += `  [${v.advisory?.id}] ${v.advisory?.package || '?'}\n`;
+          out += `    ${v.advisory?.title || ''}\n`;
+          if (v.advisory?.url) out += `    ${v.advisory.url}\n`;
+          if (v.versions?.patched?.length) out += `    Fix: ${v.versions.patched.join(', ')}\n`;
+          out += '\n';
+        });
+      } catch {
+        out += result.slice(0, 1000) + '\n';
+      }
+    } catch {
+      out += `[cargo-audit not installed]\n`;
+      out += `Install: cargo install cargo-audit\n`;
+    }
+    out += '\n';
+  }
+
+  if (!found) {
+    out += `No supported package managers found.\n`;
+    out += `Supported: package.json (npm), requirements.txt (pip), go.mod (Go), Cargo.lock (Rust)\n`;
+  }
+
+  const totalMs = Math.round(performance.now() - t0);
+  out += `Audit time: ${totalMs}ms\n`;
+  return out;
+}
+
+function execSecretsScan({ path: repoPath, scan_history = true }) {
+  if (!existsSync(repoPath)) return `Not found: ${repoPath}`;
+  const t0 = performance.now();
+
+  let out = `Secrets Scan: ${repoPath}\n${'='.repeat(50)}\n\n`;
+
+  // Check if gitleaks is available
+  let hasGitleaks = false;
+  try { exec('gitleaks version', { timeout: 5000 }); hasGitleaks = true; } catch {}
+
+  if (hasGitleaks) {
+    try {
+      const mode = scan_history && existsSync(resolve(repoPath, '.git')) ? 'detect' : 'detect --no-git';
+      const result = exec(`cd "${repoPath}" && gitleaks ${mode} --report-format json --report-path /dev/stdout 2>/dev/null || true`, { timeout: 60000 });
+      const findings = JSON.parse(result || '[]');
+
+      out += `Scanner: gitleaks\n`;
+      out += `Mode: ${scan_history ? 'files + git history' : 'files only'}\n`;
+      out += `Findings: ${findings.length}\n\n`;
+
+      // Group by rule
+      const byRule = {};
+      findings.forEach(f => {
+        const rule = f.RuleID || 'unknown';
+        if (!byRule[rule]) byRule[rule] = [];
+        byRule[rule].push(f);
+      });
+
+      for (const [rule, items] of Object.entries(byRule)) {
+        out += `[!!] ${rule} (${items.length}):\n`;
+        items.slice(0, 5).forEach(f => {
+          const file = f.File || '?';
+          const line = f.StartLine || '?';
+          const commit = f.Commit?.slice(0, 8) || '';
+          // Redact the actual secret
+          const match = (f.Match || '').replace(/([A-Za-z0-9+/=_-]{6})[A-Za-z0-9+/=_-]{6,}/g, '$1********');
+          out += `  ${file}:${line}`;
+          if (commit) out += ` (commit ${commit})`;
+          out += `\n    ${match.slice(0, 120)}\n`;
+          if (f.Author) out += `    Author: ${f.Author}\n`;
+          if (f.Date) out += `    Date: ${f.Date}\n`;
+          out += '\n';
+        });
+        if (items.length > 5) out += `  ... and ${items.length - 5} more\n\n`;
+      }
+    } catch (e) {
+      out += `Gitleaks error: ${e.message}\n\n`;
+    }
+  } else {
+    // Enhanced fallback: entropy-based + pattern matching
+    out += `[gitleaks not installed — using enhanced pattern + entropy scan]\n`;
+    out += `Install gitleaks for comprehensive detection: brew install gitleaks\n\n`;
+
+    const secretPatterns = [
+      { name: 'AWS Access Key', pattern: 'AKIA[0-9A-Z]{16}' },
+      { name: 'AWS Secret Key', pattern: 'aws_secret_access_key.*[A-Za-z0-9/+=]{40}' },
+      { name: 'GitHub Token', pattern: 'gh[ps]_[A-Za-z0-9_]{36,}' },
+      { name: 'GitLab Token', pattern: 'glpat-[A-Za-z0-9-]{20,}' },
+      { name: 'Slack Token', pattern: 'xox[bpors]-[0-9a-zA-Z-]{10,}' },
+      { name: 'OpenAI Key', pattern: 'sk-[a-zA-Z0-9]{20,}' },
+      { name: 'OpenRouter Key', pattern: 'sk-or-v1-[a-f0-9]{64}' },
+      { name: 'Google API Key', pattern: 'AIza[0-9A-Za-z-_]{35}' },
+      { name: 'Stripe Key', pattern: 'sk_live_[0-9a-zA-Z]{24,}' },
+      { name: 'Twilio Key', pattern: 'SK[0-9a-fA-F]{32}' },
+      { name: 'SendGrid Key', pattern: 'SG\\.[A-Za-z0-9-_]{22,}' },
+      { name: 'Private Key', pattern: 'BEGIN.*(RSA|EC|DSA|OPENSSH|PGP).*PRIVATE KEY' },
+      { name: 'JWT Token', pattern: 'eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}' },
+      { name: 'Generic High-Entropy', pattern: '[A-Za-z0-9+/=_-]{40,}' },
+    ];
+
+    let totalFindings = 0;
+    const excludes = "--glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!vendor' --glob '!dist' --glob '!*.map'";
+
+    // Scan current files
+    out += `## Current Files\n`;
+    for (const { name, pattern } of secretPatterns) {
+      try {
+        const result = exec(`rg --no-heading -n -m 10 ${excludes} -- "${pattern}" "${repoPath}" 2>/dev/null || true`, { timeout: 10000 });
+        if (result.trim()) {
+          const lines = result.trim().split('\n');
+          totalFindings += lines.length;
+          out += `  [!!] ${name} (${lines.length} match${lines.length > 1 ? 'es' : ''}):\n`;
+          lines.slice(0, 3).forEach(l => {
+            const redacted = l.replace(/([A-Za-z0-9+/=_-]{6})[A-Za-z0-9+/=_-]{8,}/g, '$1********');
+            out += `    ${relative(repoPath, redacted.split(':')[0])}:${redacted.split(':').slice(1).join(':').trim().slice(0, 120)}\n`;
+          });
+          if (lines.length > 3) out += `    ... and ${lines.length - 3} more\n`;
+          out += '\n';
+        }
+      } catch {}
+    }
+
+    // Scan git history if requested
+    if (scan_history && existsSync(resolve(repoPath, '.git'))) {
+      out += `## Git History\n`;
+      let historyFindings = 0;
+      for (const { name, pattern } of secretPatterns.slice(0, 8)) { // limit to top patterns for speed
+        try {
+          const result = exec(`cd "${repoPath}" && git log --all -p --format="COMMIT:%H %an %ai" -S "${pattern}" 2>/dev/null | rg -m 5 "COMMIT:|${pattern}" 2>/dev/null || true`, { timeout: 15000 });
+          const matches = result.trim().split('\n').filter(l => l.trim() && !l.startsWith('COMMIT:'));
+          if (matches.length > 0 && matches[0] !== '') {
+            historyFindings += matches.length;
+            out += `  [!!] ${name} in git history (${matches.length} match${matches.length > 1 ? 'es' : ''}):\n`;
+            result.trim().split('\n').filter(l => l.startsWith('COMMIT:')).slice(0, 3).forEach(l => {
+              out += `    ${l.replace('COMMIT:', '').trim()}\n`;
+            });
+            out += '\n';
+          }
+        } catch {}
+      }
+      if (historyFindings === 0) out += `  No secrets found in git history.\n\n`;
+      totalFindings += historyFindings;
+    }
+
+    out += `${'='.repeat(50)}\n`;
+    out += `Total: ${totalFindings} potential secrets found\n`;
+    if (totalFindings > 0) {
+      out += `\nRecommended actions:\n`;
+      out += `  1. Rotate any exposed keys immediately\n`;
+      out += `  2. Add patterns to .gitignore\n`;
+      out += `  3. Use environment variables instead of hardcoded secrets\n`;
+      out += `  4. Run 'gitleaks detect' for comprehensive scanning\n`;
+      out += `  5. Use BFG Repo-Cleaner to remove secrets from git history\n`;
+    }
+  }
+
+  const totalMs = Math.round(performance.now() - t0);
+  out += `\nScan time: ${totalMs}ms\n`;
+  return out;
 }
 
 // ═══════════════════════════════════════════

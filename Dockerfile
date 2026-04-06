@@ -5,8 +5,11 @@ RUN apt-get update && apt-get install -y \
     curl ca-certificates gnupg \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y \
-    nodejs ripgrep python3 g++ git xz-utils \
+    nodejs ripgrep python3 python3-pip g++ git xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# Install semgrep for deep security scanning
+RUN pip3 install semgrep --break-system-packages 2>/dev/null || echo "semgrep install skipped"
 
 # Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
