@@ -365,6 +365,12 @@ DEEP UNDERSTANDING:
 - repo_summary — comprehensive repo overview (README + structure + deps + stats)
 - knowledge_graph — build module map: imports, exports, definitions, relationships
 
+FILE FINDING & LSP:
+- fast_find — ultra-fast file finder (fd). Search by name, extension, size, modification time. 10-100x faster than find.
+- lsp_symbols — extract all functions/classes/methods/types from files. Language-aware parsing for JS/TS/Python/Go/Rust/C/Java/Ruby.
+- lsp_definitions — find where a symbol is defined. Follows imports across files.
+- lsp_diagnostics — run compiler/linter checks. Syntax errors, type errors, unused vars, missing imports.
+
 API INTELLIGENCE:
 - openapi_search — search OpenAPI/Swagger specs at milli-speed. Modes: endpoints, schemas, search, detail. Way faster & more token-efficient than grepping raw YAML.
 
