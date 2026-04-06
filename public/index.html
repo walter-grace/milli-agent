@@ -140,7 +140,7 @@ const IMPLS = {cpp:{name:'C++',color:'#00a0e4',icon:'⚡'},rust:{name:'Rust',col
 const fmt = ms => ms<1000?Math.round(ms)+'ms':(ms/1000).toFixed(1)+'s';
 const h = (tag, props, ...kids) => { const el=document.createElement(tag); if(props) Object.entries(props).forEach(([k,v])=>{ if(k==='style'&&typeof v==='object') Object.assign(el.style,v); else if(k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(),v); else if(k==='className') el.className=v; else if(k==='innerHTML') el.innerHTML=v; else el.setAttribute(k,v); }); kids.flat(9).forEach(c=>{ if(c==null)return; el.appendChild(typeof c==='string'?document.createTextNode(c):c); }); return el; };
 
-let state = { tab:'search', model:'google/gemma-4-26b-a4b-it', impl:'cpp', models:[], ready:0, msgs:[], input:'', sending:false, racePattern:'', racePath:'https://github.com/walter-grace/milli-agent', raceResults:{}, raceWinner:null, racing:false, sessionCost:0, accountCost:0, cacheHits:0, cacheSaved:0 };
+let state = { tab:'search', model:'google/gemma-4-26b-a4b-it', impl:'cpp', models:[], activeModels:['google/gemma-4-26b-a4b-it'], ready:0, msgs:[], input:'', sending:false, racePattern:'', racePath:'https://github.com/walter-grace/milli-agent', raceResults:{}, raceWinner:null, racing:false, sessionCost:0, accountCost:0, cacheHits:0, cacheSaved:0 };
 let currentTab = null;
 let chatInput = null; // persistent textarea ref
 let raceInput = null; // persistent race input ref
@@ -159,6 +159,40 @@ function render() {
     app.innerHTML = '';
     app.appendChild(buildNav());
     const content = h('div',{className:'content'});
+
+    // Model tab bar — horizontal chips like OpenRouter
+    if (state.activeModels.length > 0) {
+      const modelBar = h('div',{style:{display:'flex',alignItems:'center',gap:'4px',padding:'6px 12px',borderBottom:'1px solid var(--border)',overflowX:'auto',flexShrink:0}});
+      state.activeModels.forEach(mid => {
+        const m = state.models.find(x => x.id === mid);
+        if (!m) return;
+        const isCurrent = state.model === mid;
+        const chip = h('div',{style:{display:'flex',alignItems:'center',gap:'6px',padding:'4px 10px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',flexShrink:0,transition:'all .15s',
+          background:isCurrent?'var(--bg3)':'transparent',
+          color:isCurrent?'var(--fg)':'var(--fg3)',
+          border:'1px solid '+(isCurrent?'var(--border)':'transparent')},
+          onClick:()=>{state.model=mid;render();}});
+        chip.appendChild(h('span',null,m.name));
+        // × close button
+        if (state.activeModels.length > 1) {
+          const close = h('span',{style:{fontSize:'10px',color:'var(--fg3)',cursor:'pointer',marginLeft:'2px',padding:'0 2px',borderRadius:'3px',transition:'color .1s'},
+            onClick:(e)=>{e.stopPropagation();state.activeModels=state.activeModels.filter(id=>id!==mid);if(state.model===mid)state.model=state.activeModels[0];render();}});
+          close.textContent = '×';
+          close.addEventListener('mouseenter',()=>close.style.color='var(--red)');
+          close.addEventListener('mouseleave',()=>close.style.color='var(--fg3)');
+          chip.appendChild(close);
+        }
+        modelBar.appendChild(chip);
+      });
+      // + button to add model
+      const addBtn = h('button',{style:{width:'26px',height:'26px',borderRadius:'6px',border:'1px dashed var(--border)',background:'transparent',color:'var(--fg3)',cursor:'pointer',fontSize:'14px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,transition:'all .15s'},
+        onClick:()=>{toggleCmdK();}});
+      addBtn.textContent = '+';
+      addBtn.addEventListener('mouseenter',()=>{addBtn.style.borderColor='var(--purple)';addBtn.style.color='var(--purple)';});
+      addBtn.addEventListener('mouseleave',()=>{addBtn.style.borderColor='var(--border)';addBtn.style.color='var(--fg3)';});
+      modelBar.appendChild(addBtn);
+      content.appendChild(modelBar);
+    }
     if (state.tab==='search') content.appendChild(renderSearch());
     else if (state.tab==='chat') content.appendChild(renderChat());
     else if (state.tab==='api') content.appendChild(renderAPI());
@@ -272,15 +306,58 @@ function buildNav() {
   });
   sidebar.appendChild(nav);
 
-  // Footer — selectors + stats
-  const footer = h('div',{className:'sidebar-footer'});
-  footer.appendChild(renderSelect('sel',state.impl,Object.entries(IMPLS).map(([k,v])=>({value:k,label:v.icon+' '+v.name})),v=>{state.impl=v;}));
-  footer.appendChild(renderSelect('sel',state.model,state.models.map(m=>({value:m.id,label:m.name+(m.free?' ✦':'')})),v=>{state.model=v;}));
+  // Footer — checkable model/server list + stats
+  const footer = h('div',{className:'sidebar-footer',style:{padding:'8px 10px 12px'}});
 
-  const stats = h('div',{className:'sidebar-stats'});
-  stats.appendChild(h('span',{className:'sidebar-stat',style:{background:state.ready===4?'rgba(34,197,94,.1)':'rgba(234,179,8,.1)',color:state.ready===4?'var(--green)':'var(--yellow)'}},state.ready+'/4 servers'));
+  // Server section
+  footer.appendChild(h('div',{style:{fontSize:'10px',color:'var(--fg3)',textTransform:'uppercase',letterSpacing:'1px',fontWeight:600,marginBottom:'6px',padding:'0 4px'}},'Server'));
+  const serverList = h('div',{style:{maxHeight:'100px',overflowY:'auto',marginBottom:'10px'}});
+  Object.entries(IMPLS).forEach(([id, impl]) => {
+    const active = state.impl === id;
+    const row = h('button',{style:{display:'flex',alignItems:'center',gap:'8px',width:'100%',padding:'5px 8px',borderRadius:'6px',border:'none',background:active?'var(--bg3)':'transparent',color:active?'var(--fg)':'var(--fg3)',cursor:'pointer',fontSize:'12px',textAlign:'left',transition:'all .15s'},
+      onClick:()=>{state.impl=id;refreshNav();}});
+    // Checkbox
+    const check = h('div',{style:{width:'14px',height:'14px',borderRadius:'4px',border:'1px solid '+(active?'var(--green)':'var(--border)'),background:active?'var(--green)':'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,transition:'all .15s',fontSize:'9px',color:'#000'}});
+    if (active) check.textContent = '✓';
+    row.appendChild(check);
+    row.appendChild(h('span',null,impl.icon+' '+impl.name));
+    serverList.appendChild(row);
+  });
+  footer.appendChild(serverList);
+
+  // Model section — multi-select checkboxes
+  footer.appendChild(h('div',{style:{fontSize:'10px',color:'var(--fg3)',textTransform:'uppercase',letterSpacing:'1px',fontWeight:600,marginBottom:'6px',padding:'0 4px'}},'Models'));
+  const modelList = h('div',{style:{maxHeight:'120px',overflowY:'auto',marginBottom:'10px'}});
+  state.models.forEach(m => {
+    const active = state.activeModels.includes(m.id);
+    const isCurrent = state.model === m.id;
+    const row = h('button',{style:{display:'flex',alignItems:'center',gap:'8px',width:'100%',padding:'5px 8px',borderRadius:'6px',border:'none',background:isCurrent?'var(--bg3)':'transparent',color:active?'var(--fg)':'var(--fg3)',cursor:'pointer',fontSize:'12px',textAlign:'left',transition:'all .15s'},
+      onClick:()=>{
+        // Toggle in activeModels
+        if (active && state.activeModels.length > 1) {
+          state.activeModels = state.activeModels.filter(id => id !== m.id);
+          if (state.model === m.id) state.model = state.activeModels[0];
+        } else if (!active) {
+          state.activeModels.push(m.id);
+        }
+        // Click also sets as current
+        state.model = m.id;
+        refreshNav();
+      }});
+    const check = h('div',{style:{width:'14px',height:'14px',borderRadius:'4px',border:'1px solid '+(active?'var(--purple)':'var(--border)'),background:active?'var(--purple)':'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,transition:'all .15s',fontSize:'9px',color:'#fff'}});
+    if (active) check.textContent = '✓';
+    row.appendChild(check);
+    row.appendChild(h('span',{style:{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},m.name));
+    if (m.free) row.appendChild(h('span',{style:{marginLeft:'auto',fontSize:'9px',color:'var(--green)',fontWeight:600,flexShrink:0}},'free'));
+    modelList.appendChild(row);
+  });
+  footer.appendChild(modelList);
+
+  // Stats
+  const stats = h('div',{style:{display:'flex',flexWrap:'wrap',gap:'4px',padding:'0 4px'}});
+  stats.appendChild(h('span',{className:'sidebar-stat',style:{background:state.ready===4?'rgba(34,197,94,.1)':'rgba(234,179,8,.1)',color:state.ready===4?'var(--green)':'var(--yellow)'}},state.ready+'/4'));
   if (state.sessionCost > 0) stats.appendChild(h('span',{className:'sidebar-stat',style:{background:'rgba(34,197,94,.1)',color:'var(--green)'}},'$'+state.sessionCost.toFixed(4)));
-  if (state.cacheHits > 0) stats.appendChild(h('span',{className:'sidebar-stat',style:{background:'rgba(139,92,246,.1)',color:'var(--purple)'}},state.cacheHits+' cache hits'));
+  if (state.cacheHits > 0) stats.appendChild(h('span',{className:'sidebar-stat',style:{background:'rgba(139,92,246,.1)',color:'var(--purple)'}},state.cacheHits+' hits'));
   footer.appendChild(stats);
   sidebar.appendChild(footer);
 
