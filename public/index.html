@@ -321,6 +321,15 @@ function render() {
   } catch(e) { console.error('Render error:', e); document.getElementById('app').innerHTML = '<div style="padding:40px;color:#fff">Render error: '+e.message+'</div>'; }
 }
 
+// Toast notifications
+function showToast(msg, type = '') {
+  const existing = document.querySelector('.toast');
+  if (existing) existing.remove();
+  const toast = h('div',{className:'toast '+ type},msg);
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 4000);
+}
+
 // CMD+K global search
 let cmdkOpen = false;
 document.addEventListener('keydown', e => {
@@ -403,7 +412,7 @@ function buildNav() {
   // Logo
   const logo = h('div',{className:'sidebar-logo'});
   logo.appendChild(h('h1',null,'Milli'));
-  logo.appendChild(h('span',null,'24 tools'));
+  logo.appendChild(h('span',null,'31 tools'));
   sidebar.appendChild(logo);
 
   // Nav items
@@ -466,7 +475,8 @@ function buildNav() {
 
   // Stats
   const stats = h('div',{style:{display:'flex',flexWrap:'wrap',gap:'4px',padding:'0 4px'}});
-  stats.appendChild(h('span',{className:'sidebar-stat',style:{background:state.ready===4?'rgba(34,197,94,.1)':'rgba(234,179,8,.1)',color:state.ready===4?'var(--green)':'var(--yellow)'}},state.ready+'/4'));
+  const serverCount = Object.keys(IMPLS).length;
+  stats.appendChild(h('span',{className:'sidebar-stat',style:{background:state.ready>=serverCount-1?'rgba(34,197,94,.1)':'rgba(234,179,8,.1)',color:state.ready>=serverCount-1?'var(--green)':'var(--yellow)'}},state.ready+'/'+serverCount));
   if (state.sessionCost > 0) stats.appendChild(h('span',{className:'sidebar-stat',style:{background:'rgba(34,197,94,.1)',color:'var(--green)'}},'$'+state.sessionCost.toFixed(4)));
   if (state.cacheHits > 0) stats.appendChild(h('span',{className:'sidebar-stat',style:{background:'rgba(139,92,246,.1)',color:'var(--purple)'}},state.cacheHits+' hits'));
   footer.appendChild(stats);
@@ -490,7 +500,7 @@ function renderToolCard(tc) {
   const head = h('div',{className:'tc-head'},
     loading ? h('span',{className:'spinner'}) : h('span',null,'▶'),
     h('span',null,(loading?'Calling ':'Result from ')),
-    h('code',{style:{color:'var(--purple)',fontSize:'11px'}},'grep_search'),
+    h('code',{style:{color:'var(--purple)',fontSize:'11px'}},tc.name||'tool'),
     h('span',{className:'tc-badge',style:{background:impl.color+'15',color:impl.color,border:'1px solid '+impl.color+'30'}},impl.icon+' '+impl.name),
   );
   if(tc.result) head.appendChild(h('span',{style:{marginLeft:'auto',fontFamily:'monospace',fontWeight:700,color:'var(--green)',fontSize:'12px'}},fmt(tc.result.elapsed)));
@@ -646,7 +656,7 @@ function chatAddToolCall(tc) {
   const head = h('div',{className:'tc-head'},
     h('span',{className:'spinner'}),
     h('span',null,'Calling '),
-    h('code',{style:{color:'var(--purple)',fontSize:'11px'}},'grep_search'),
+    h('code',{style:{color:'var(--purple)',fontSize:'11px'}},tc.name||'tool'),
     h('span',{className:'tc-badge',style:{background:impl.color+'15',color:impl.color,border:'1px solid '+impl.color+'30'}},impl.icon+' '+impl.name),
   );
   card.appendChild(head);
@@ -684,7 +694,7 @@ function chatUpdateToolResult(result) {
     const impl = IMPLS[result.impl] || IMPLS.cpp;
     head.appendChild(h('span',null,'▶'));
     head.appendChild(h('span',null,'Result from '));
-    head.appendChild(h('code',{style:{color:'var(--purple)',fontSize:'11px'}},'grep_search'));
+    head.appendChild(h('code',{style:{color:'var(--purple)',fontSize:'11px'}},result.name||'tool'));
     head.appendChild(h('span',{className:'tc-badge',style:{background:impl.color+'15',color:impl.color,border:'1px solid '+impl.color+'30'}},impl.icon+' '+impl.name));
     head.appendChild(h('span',{style:{marginLeft:'auto',fontFamily:'monospace',fontWeight:700,color:'var(--green)',fontSize:'12px'}},fmt(result.elapsed)));
   }
@@ -1145,21 +1155,41 @@ async function runAnalysis() {
 
 // Compare state
 let compareInput = null;
-let cmpState = { input: '', sending: false, userMsg: '', results: {} };
+let cmpState = { input: '', sending: false, userMsg: '', results: {}, repoUrl: 'https://github.com/walter-grace/milli-agent' };
 
 function renderCompare() {
   const div = h('div',{style:{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden'}});
 
   // Header
   const header = h('div',{style:{padding:'16px 24px 12px',flexShrink:0,borderBottom:'1px solid var(--border)'}});
-  header.appendChild(h('h2',{style:{fontSize:'16px',fontWeight:700,marginBottom:'4px'}},'Compare — All 4 Servers'));
-  header.appendChild(h('p',{style:{fontSize:'12px',color:'var(--fg3)',marginBottom:'12px'}},'Same prompt runs through all MCP servers simultaneously. Clone repos, search code, compare results.'));
+  header.appendChild(h('h2',{style:{fontSize:'16px',fontWeight:700,marginBottom:'4px'}},'Compare — Race All Servers'));
+  header.appendChild(h('p',{style:{fontSize:'12px',color:'var(--fg3)',marginBottom:'12px'}},'Same prompt runs through all MCP servers simultaneously. Compare speed, accuracy, and token efficiency.'));
+
+  // GitHub URL input
+  const urlRow = h('div',{style:{display:'flex',gap:'8px',marginBottom:'10px'}});
+  const urlInput = document.createElement('input');
+  urlInput.className = 'sinput';
+  urlInput.placeholder = 'GitHub URL (auto-clones before searching)...';
+  urlInput.value = cmpState.repoUrl || '';
+  urlInput.style.cssText = 'flex:1;font-size:12px;';
+  urlInput.addEventListener('input', e => { cmpState.repoUrl = e.target.value; });
+  urlRow.appendChild(urlInput);
+
+  // Model selector for compare
+  const modelLabel = h('span',{style:{fontSize:'11px',color:'var(--fg3)',display:'flex',alignItems:'center',gap:'4px'}}, 'Model:');
+  const modelSel = renderSelect('sel', state.model, state.models.map(m=>({value:m.id,label:m.name+(m.free?' ✦':'')})), v=>{state.model=v;});
+  modelSel.style.cssText = 'height:30px;font-size:11px;';
+  urlRow.appendChild(modelLabel);
+  urlRow.appendChild(modelSel);
+  header.appendChild(urlRow);
+
+  // Preset chips
   const chips = h('div',{style:{display:'flex',flexWrap:'wrap',gap:'6px'}});
   [
-    ['Clone picoclaw, find tools','Clone https://github.com/sipeed/picoclaw and find all tool definitions'],
-    ['Clone milli-agent, find TODOs','Clone https://github.com/walter-grace/milli-agent and find all TODO comments'],
-    ['Clone picoclaw, find tools','Clone https://github.com/sipeed/picoclaw and search for all tool definitions'],
-    ['Clone exo, find errors','Clone https://github.com/exo-explore/exo and search for error handling'],
+    ['Security review milli-agent','Clone https://github.com/walter-grace/milli-agent and run deep_security_scan then secrets_scan'],
+    ['Find TODOs in milli-agent','Clone https://github.com/walter-grace/milli-agent and find all TODO comments'],
+    ['Analyze Express.js','Clone https://github.com/expressjs/express and run repo_summary then knowledge_graph depth=2'],
+    ['Search exo for errors','Clone https://github.com/exo-explore/exo and search for error handling'],
   ].forEach(([label,prompt]) => {
     chips.appendChild(h('button',{className:'pre',onClick:()=>{ cmpState.input=prompt; if(compareInput) compareInput.value=prompt; }},label));
   });
@@ -1195,7 +1225,7 @@ function renderCompare() {
           const tcEl = h('div',{style:{marginBottom:'8px',border:'1px solid var(--bg3)',borderRadius:'8px',overflow:'hidden'}});
           tcEl.appendChild(h('div',{style:{padding:'4px 8px',background:'rgba(0,0,0,0.2)',color:'var(--fg2)',display:'flex',alignItems:'center',gap:'6px',fontSize:'11px'}},
             h('span',{style:{color:impl.color}},impl.icon),
-            h('code',{style:{color:'var(--purple)'}},'grep_search'),
+            h('code',{style:{color:'var(--purple)'}},tc.name||'tool'),
             tc.result?h('span',{style:{marginLeft:'auto',color:'var(--green)',fontFamily:'monospace',fontWeight:600,fontSize:'10px'}},fmt(tc.result.elapsed)+' · '+tc.result.matchCount+' hits'):h('span',{className:'spinner'}),
           ));
           if(tc.result?.preview) { const ls=h('div',{style:{maxHeight:'100px',overflowY:'auto',fontSize:'11px',fontFamily:'monospace'}}); tc.result.preview.slice(0,6).forEach(l=>{const p=l.split(':');ls.appendChild(h('div',{className:'tc-line'},h('span',{className:'tc-f'},p[0]?.split('/').pop()||''),h('span',{className:'tc-n'},p[1]||''),h('span',{className:'tc-c'},p.slice(2).join(':'))));});tcEl.appendChild(ls); }
@@ -1263,7 +1293,7 @@ function renderCardHTML(implId) {
       html += '<div style="margin-bottom:8px;border:1px solid var(--bg3);border-radius:8px;overflow:hidden">';
       html += '<div style="padding:4px 8px;background:rgba(0,0,0,0.2);color:var(--fg2);display:flex;align-items:center;gap:6px;font-size:11px">';
       html += '<span style="color:'+impl.color+'">'+impl.icon+'</span>';
-      html += '<code style="color:var(--purple)">grep_search</code>';
+      html += '<code style="color:var(--purple)">'+(tc.name||'tool')+'</code>';
       if (tc.result) {
         html += '<span style="margin-left:auto;color:var(--green);font-family:monospace;font-weight:600;font-size:10px">'+fmt(tc.result.elapsed)+' · '+tc.result.matchCount+' hits</span>';
       } else {
