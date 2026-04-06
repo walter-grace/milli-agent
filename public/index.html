@@ -261,6 +261,9 @@ function refreshNav() {
 }
 
 function render() {
+  try { _render(); } catch(e) { console.error('Render error:', e); document.getElementById('app').innerHTML = '<div style="padding:40px;color:#fff">Error: '+e.message+'<br>Try refreshing.</div>'; }
+}
+function _render() {
   const app = document.getElementById('app');
 
   // Only full rebuild on tab change or first render
@@ -270,7 +273,7 @@ function render() {
     const content = h('div',{className:'content'});
 
     // Model tab bar — horizontal chips like OpenRouter
-    if (state.activeModels.length > 0) {
+    if (state.activeModels.length > 0 && state.models.length > 0) {
       const modelBar = h('div',{style:{display:'flex',alignItems:'center',gap:'4px',padding:'6px 12px',borderBottom:'1px solid var(--border)',overflowX:'auto',flexShrink:0}});
       state.activeModels.forEach(mid => {
         const m = state.models.find(x => x.id === mid);
@@ -1719,14 +1722,19 @@ function createProgram(gl, vs, fs) {
 function buildWarpAnimation(statusText = 'Scanning', subText = '') {
   const container = h('div',{className:'warp-container'});
 
-  // Try WebGL first
-  const canvas = document.createElement('canvas');
-  const gl = canvas.getContext('webgl', { alpha: true, antialias: true });
-
-  if (!gl) {
-    // CSS fallback
+  // Try WebGL first — wrapped in try/catch for Safari compatibility
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl', { alpha: true, antialias: true });
+    if (!gl) throw new Error('no webgl');
+    return buildWarpWebGL(container, canvas, gl, statusText, subText);
+  } catch(e) {
+    console.warn('WebGL warp failed, using CSS fallback:', e.message);
     return buildWarpCSS(container, statusText, subText);
   }
+}
+
+function buildWarpWebGL(container, canvas, gl, statusText, subText) {
 
   canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;';
   container.appendChild(canvas);
