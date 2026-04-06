@@ -294,13 +294,37 @@ function render() {
         }
         modelBar.appendChild(chip);
       });
-      // + button to add model
-      const addBtn = h('button',{style:{width:'26px',height:'26px',borderRadius:'6px',border:'1px dashed var(--border)',background:'transparent',color:'var(--fg3)',cursor:'pointer',fontSize:'14px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,transition:'all .15s'},
-        onClick:()=>{toggleCmdK();}});
+      // + button to add model — shows dropdown of available models
+      const addWrap = h('div',{style:{position:'relative',flexShrink:0}});
+      const addBtn = h('button',{style:{width:'26px',height:'26px',borderRadius:'6px',border:'1px dashed var(--border)',background:'transparent',color:'var(--fg3)',cursor:'pointer',fontSize:'14px',display:'flex',alignItems:'center',justifyContent:'center',transition:'all .15s'},
+        onClick:()=>{
+          const existing = addWrap.querySelector('.model-dropdown');
+          if (existing) { existing.remove(); return; }
+          const dd = h('div',{className:'model-dropdown',style:{position:'absolute',top:'32px',right:0,width:'220px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:'var(--radius)',boxShadow:'var(--shadow-lg)',zIndex:50,padding:'6px',maxHeight:'240px',overflowY:'auto'}});
+          state.models.forEach(m => {
+            const active = state.activeModels.includes(m.id);
+            const row = h('button',{style:{display:'flex',alignItems:'center',gap:'8px',width:'100%',padding:'7px 10px',borderRadius:'6px',border:'none',background:active?'var(--bg3)':'transparent',color:active?'var(--fg)':'var(--fg3)',cursor:'pointer',fontSize:'12px',textAlign:'left',transition:'all .1s'},
+              onClick:()=>{
+                if (active) { if (state.activeModels.length>1) { state.activeModels=state.activeModels.filter(id=>id!==m.id); if(state.model===m.id)state.model=state.activeModels[0]; } }
+                else { state.activeModels.push(m.id); state.model=m.id; }
+                dd.remove(); render();
+              }});
+            const check = h('div',{style:{width:'14px',height:'14px',borderRadius:'4px',border:'1px solid '+(active?'var(--purple)':'var(--border)'),background:active?'var(--purple)':'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:'9px',color:'#fff'}});
+            if (active) check.textContent = '✓';
+            row.appendChild(check);
+            row.appendChild(h('span',null,m.name));
+            if (m.free) row.appendChild(h('span',{style:{marginLeft:'auto',fontSize:'9px',color:'var(--green)',fontWeight:600}},'free'));
+            dd.appendChild(row);
+          });
+          addWrap.appendChild(dd);
+          // Close on click outside
+          setTimeout(()=>{ document.addEventListener('click', function close(e) { if (!addWrap.contains(e.target)) { dd.remove(); document.removeEventListener('click',close); } }); },10);
+        }});
       addBtn.textContent = '+';
       addBtn.addEventListener('mouseenter',()=>{addBtn.style.borderColor='var(--purple)';addBtn.style.color='var(--purple)';});
       addBtn.addEventListener('mouseleave',()=>{addBtn.style.borderColor='var(--border)';addBtn.style.color='var(--fg3)';});
-      modelBar.appendChild(addBtn);
+      addWrap.appendChild(addBtn);
+      modelBar.appendChild(addWrap);
       content.appendChild(modelBar);
     }
     if (state.tab==='search') content.appendChild(renderSearch());
@@ -1165,23 +1189,7 @@ function renderCompare() {
   header.appendChild(h('h2',{style:{fontSize:'16px',fontWeight:700,marginBottom:'4px'}},'Compare — Race All Servers'));
   header.appendChild(h('p',{style:{fontSize:'12px',color:'var(--fg3)',marginBottom:'12px'}},'Same prompt runs through all MCP servers simultaneously. Compare speed, accuracy, and token efficiency.'));
 
-  // GitHub URL input
-  const urlRow = h('div',{style:{display:'flex',gap:'8px',marginBottom:'10px'}});
-  const urlInput = document.createElement('input');
-  urlInput.className = 'sinput';
-  urlInput.placeholder = 'GitHub URL (auto-clones before searching)...';
-  urlInput.value = cmpState.repoUrl || '';
-  urlInput.style.cssText = 'flex:1;font-size:12px;';
-  urlInput.addEventListener('input', e => { cmpState.repoUrl = e.target.value; });
-  urlRow.appendChild(urlInput);
-
-  // Model selector for compare
-  const modelLabel = h('span',{style:{fontSize:'11px',color:'var(--fg3)',display:'flex',alignItems:'center',gap:'4px'}}, 'Model:');
-  const modelSel = renderSelect('sel', state.model, state.models.map(m=>({value:m.id,label:m.name+(m.free?' ✦':'')})), v=>{state.model=v;});
-  modelSel.style.cssText = 'height:30px;font-size:11px;';
-  urlRow.appendChild(modelLabel);
-  urlRow.appendChild(modelSel);
-  header.appendChild(urlRow);
+  header.appendChild(h('p',{style:{fontSize:'11px',color:'var(--fg3)',marginBottom:'8px'}},'Add models with the + button in the top bar. Each model races all MCP servers.'));
 
   // Preset chips
   const chips = h('div',{style:{display:'flex',flexWrap:'wrap',gap:'6px'}});
