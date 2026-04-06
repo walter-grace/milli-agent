@@ -127,6 +127,7 @@ function render() {
     if (state.tab==='search') app.appendChild(renderSearch());
     else if (state.tab==='chat') app.appendChild(renderChat());
     else if (state.tab==='api') app.appendChild(renderAPI());
+    else if (state.tab==='whitehat') app.appendChild(renderWhiteHat());
     else app.appendChild(renderCompare());
     currentTab = state.tab;
   } else {
@@ -145,6 +146,7 @@ function buildNav() {
       h('button',{className:'tab'+(state.tab==='chat'?' tab-active':''),onClick:()=>{state.tab='chat';render();}},'Chat'),
       h('button',{className:'tab'+(state.tab==='compare'?' tab-active':''),onClick:()=>{state.tab='compare';render();}},'Compare'),
       h('button',{className:'tab'+(state.tab==='api'?' tab-active':''),onClick:()=>{state.tab='api';render();}},'API'),
+      h('button',{className:'tab'+(state.tab==='whitehat'?' tab-active':''),onClick:()=>{state.tab='whitehat';render();}},'WhiteHat'),
     ),
     h('div',{style:{flex:1}}),
     state.sessionCost > 0 ? h('span',{style:{fontSize:'11px',color:'var(--green)',fontWeight:600,marginRight:'12px',fontFamily:'monospace'}},
@@ -1263,6 +1265,177 @@ async function runAPIRace() {
   apiState.racing = false;
   const el = document.getElementById('api-results');
   if (el) renderAPIRaceResults(el);
+}
+
+// ═══ WHITEHAT TAB — One-click security audit ═══
+let whState = { repo: 'https://github.com/walter-grace/milli-agent', scanning: false, steps: [], complete: null };
+
+function renderWhiteHat() {
+  const main = h('div',{style:{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden'}});
+
+  // Header
+  const top = h('div',{style:{padding:'20px 24px',flexShrink:0,borderBottom:'1px solid var(--border)'}});
+  top.appendChild(h('h2',{style:{fontSize:'16px',fontWeight:700,marginBottom:'2px'}},'WhiteHat Security Audit'));
+  top.appendChild(h('p',{style:{fontSize:'12px',color:'var(--fg3)',marginBottom:'14px'}},'Full security review: OWASP scan + CVE audit + secret detection + container security + network exposure. One click.'));
+
+  // Input row
+  const row = h('div',{style:{display:'flex',gap:'8px',marginBottom:'12px'}});
+  const input = document.createElement('input');
+  input.className = 'sinput';
+  input.placeholder = 'GitHub URL or owner/repo...';
+  input.value = whState.repo;
+  input.style.flex = '1';
+  input.style.fontSize = '14px';
+  input.addEventListener('input', e => whState.repo = e.target.value);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') runWhiteHatAudit(); });
+
+  const btn = h('button',{className:'sbtn',style:{padding:'12px 28px',fontSize:'14px',fontWeight:700,background:whState.scanning?'var(--bg3)':'#ef4444',color:'#fff'},onClick:runWhiteHatAudit},
+    whState.scanning ? 'Scanning...' : 'Run Full Audit');
+  row.append(input, btn);
+  top.appendChild(row);
+
+  // Preset repos
+  const presets = h('div',{style:{display:'flex',flexWrap:'wrap',gap:'6px'}});
+  [
+    ['Milli-Agent','walter-grace/milli-agent'],
+    ['Express.js','expressjs/express'],
+    ['FastAPI','tiangolo/fastapi'],
+    ['Next.js','vercel/next.js'],
+  ].forEach(([label, repo]) => {
+    presets.appendChild(h('button',{className:'pre',onClick:()=>{ whState.repo='https://github.com/'+repo; input.value=whState.repo; }},label));
+  });
+  top.appendChild(presets);
+  main.appendChild(top);
+
+  // Results area
+  const results = h('div',{id:'wh-results',style:{flex:1,overflowY:'auto',padding:'16px 24px'}});
+
+  if (whState.steps.length > 0) {
+    renderWhiteHatResults(results);
+  } else {
+    results.appendChild(h('div',{style:{textAlign:'center',paddingTop:'60px'}},
+      h('div',{style:{fontSize:'48px',marginBottom:'16px'}},'🛡'),
+      h('div',{style:{fontSize:'16px',fontWeight:600,marginBottom:'8px',color:'var(--fg)'}},'Full Security Pipeline'),
+      h('div',{style:{fontSize:'13px',color:'var(--fg3)',maxWidth:'500px',margin:'0 auto',lineHeight:'1.6'}},
+        '7 scans in sequence: Code Stats → OWASP Scan → CVE Audit → Secret Detection → Container Security → Network Exposure → Pattern Scan. Results stream in real-time.'),
+    ));
+  }
+
+  main.appendChild(results);
+  return main;
+}
+
+function renderWhiteHatResults(container) {
+  container.innerHTML = '';
+
+  // Summary bar if complete
+  if (whState.complete) {
+    const c = whState.complete;
+    const severity = c.totalFindings > 20 ? '#ef4444' : c.totalFindings > 5 ? '#f59e0b' : '#22c55e';
+    const grade = c.totalFindings === 0 ? 'A+' : c.totalFindings < 3 ? 'A' : c.totalFindings < 10 ? 'B' : c.totalFindings < 20 ? 'C' : 'D';
+    const bar = h('div',{style:{display:'flex',alignItems:'center',gap:'16px',padding:'16px 20px',borderRadius:'12px',background:'var(--bg2)',border:'2px solid '+severity,marginBottom:'16px'}});
+    bar.appendChild(h('div',{style:{fontSize:'36px',fontWeight:800,color:severity,fontFamily:'monospace'}},grade));
+    bar.appendChild(h('div',null,
+      h('div',{style:{fontSize:'14px',fontWeight:700}},c.totalFindings + ' potential issues found'),
+      h('div',{style:{fontSize:'12px',color:'var(--fg3)'}},c.scanCount + ' scans completed'),
+    ));
+    container.appendChild(bar);
+  }
+
+  // Step cards
+  whState.steps.forEach(step => {
+    const card = h('div',{style:{borderRadius:'12px',border:'1px solid var(--border)',overflow:'hidden',background:'var(--bg2)',marginBottom:'12px'}});
+
+    // Header
+    const statusColor = step.status === 'done' ? 'var(--green)' : step.status === 'error' ? '#ef4444' : '#f59e0b';
+    const statusIcon = step.status === 'done' ? '✓' : step.status === 'error' ? '✗' : '⟳';
+    const hd = h('div',{style:{display:'flex',alignItems:'center',gap:'8px',padding:'10px 14px',borderBottom:'1px solid var(--bg3)',cursor:'pointer'},onClick:()=>{
+      const body = card.querySelector('.wh-body');
+      if (body) body.style.display = body.style.display === 'none' ? 'block' : 'none';
+    }});
+    hd.appendChild(h('span',{style:{color:statusColor,fontWeight:700,fontSize:'14px'}},statusIcon));
+    hd.appendChild(h('span',{style:{fontWeight:600,fontSize:'13px'}},step.label));
+    if (step.elapsed) hd.appendChild(h('span',{style:{marginLeft:'auto',fontFamily:'monospace',fontSize:'11px',color:'var(--fg3)'}},step.elapsed+'ms'));
+    if (step.findings > 0) hd.appendChild(h('span',{style:{fontSize:'10px',fontWeight:700,color:'#ef4444',padding:'2px 8px',borderRadius:'6px',background:'rgba(239,68,68,0.1)'}},step.findings+' issues'));
+    if (step.status === 'running') hd.appendChild(h('span',{className:'spinner',style:{marginLeft:'auto'}}));
+    card.appendChild(hd);
+
+    // Body (collapsed by default for done steps, open for running)
+    if (step.text) {
+      const body = h('pre',{className:'wh-body',style:{padding:'10px 14px',maxHeight:'300px',overflowY:'auto',fontSize:'11px',fontFamily:'JetBrains Mono,monospace',lineHeight:'1.5',color:'var(--fg2)',whiteSpace:'pre-wrap',margin:0,display:step.findings > 0 ? 'block' : 'none'}});
+      body.textContent = step.text;
+      card.appendChild(body);
+    }
+
+    container.appendChild(card);
+  });
+}
+
+async function runWhiteHatAudit() {
+  if (whState.scanning || !whState.repo.trim()) return;
+  whState.scanning = true;
+  whState.steps = [];
+  whState.complete = null;
+  currentTab = null; render();
+
+  // Parse repo
+  let repo = whState.repo.trim();
+  const ghMatch = repo.match(/github\.com\/([^\/\s]+\/[^\/\s]+)/);
+  if (ghMatch) repo = ghMatch[1];
+
+  try {
+    const response = await fetch('/api/security/audit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo }),
+    });
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (!done) buffer += decoder.decode(value, { stream: true });
+      else buffer += decoder.decode();
+
+      const lines = buffer.split('\n');
+      buffer = done ? '' : lines.pop();
+
+      let evt = null;
+      for (const line of lines) {
+        if (line.startsWith('event: ')) evt = line.slice(7).trim();
+        else if (line.startsWith('data: ') && evt) {
+          try {
+            const d = JSON.parse(line.slice(6));
+            if (evt === 'step') {
+              // Update or add step
+              const existing = whState.steps.find(s => s.name === d.name);
+              if (existing) {
+                Object.assign(existing, d);
+              } else {
+                whState.steps.push(d);
+              }
+              const el = document.getElementById('wh-results');
+              if (el) renderWhiteHatResults(el);
+            }
+            if (evt === 'complete') {
+              whState.complete = d;
+              const el = document.getElementById('wh-results');
+              if (el) renderWhiteHatResults(el);
+            }
+          } catch {}
+          evt = null;
+        }
+      }
+      if (done) break;
+    }
+  } catch (e) {
+    whState.steps.push({ name: 'error', status: 'error', label: 'Audit failed: ' + e.message });
+  }
+
+  whState.scanning = false;
+  const el = document.getElementById('wh-results');
+  if (el) renderWhiteHatResults(el);
 }
 
 // Init

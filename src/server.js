@@ -748,6 +748,65 @@ app.post('/api/openapi/race', async (req, res) => {
   res.json(results);
 });
 
+// White-hat full security audit — runs all security tools, streams results via SSE
+app.post('/api/security/audit', async (req, res) => {
+  const { repo, path: localPath } = req.body;
+  if (!repo && !localPath) return res.status(400).json({ error: 'repo or path required' });
+
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+  let repoPath = localPath;
+
+  // Clone if needed
+  if (repo && !localPath) {
+    send('step', { name: 'clone', status: 'running', label: 'Cloning repository...' });
+    try {
+      repoPath = cloneOrGetRepo(repo);
+      if (!repoPath) throw new Error('Clone failed');
+      send('step', { name: 'clone', status: 'done', label: 'Cloned to ' + repoPath });
+    } catch (e) {
+      send('step', { name: 'clone', status: 'error', label: 'Clone failed: ' + e.message });
+      res.end();
+      return;
+    }
+  }
+
+  const scans = [
+    { name: 'code_stats', label: 'Code Statistics', fn: () => executeTool('code_stats', { path: repoPath }) },
+    { name: 'deep_security_scan', label: 'OWASP Security Scan', fn: () => executeTool('deep_security_scan', { path: repoPath, ruleset: 'owasp' }) },
+    { name: 'dependency_audit', label: 'Dependency CVE Audit', fn: () => executeTool('dependency_audit', { path: repoPath }) },
+    { name: 'secrets_scan', label: 'Secrets & Key Detection', fn: () => executeTool('secrets_scan', { path: repoPath, scan_history: true }) },
+    { name: 'trivy_scan', label: 'Container & IaC Security', fn: () => executeTool('trivy_scan', { path: repoPath, scan_type: 'all' }) },
+    { name: 'port_scan', label: 'Port & Network Exposure', fn: () => executeTool('port_scan', { path: repoPath }) },
+    { name: 'security_scan', label: 'Pattern-Based Security', fn: () => executeTool('security_scan', { path: repoPath }) },
+  ];
+
+  const results = {};
+  let totalFindings = 0;
+
+  for (const scan of scans) {
+    send('step', { name: scan.name, status: 'running', label: scan.label + '...' });
+    const t0 = performance.now();
+    try {
+      const result = scan.fn();
+      const elapsed = Math.round(performance.now() - t0);
+      // Count findings
+      const findingMatch = result.match(/(\d+)\s*(potential|findings|vulnerabilities|match|issues)/gi);
+      const findings = findingMatch ? findingMatch.reduce((sum, m) => sum + parseInt(m), 0) : 0;
+      totalFindings += findings;
+      results[scan.name] = { text: result, elapsed, findings };
+      send('step', { name: scan.name, status: 'done', label: scan.label, elapsed, findings, text: result });
+    } catch (e) {
+      send('step', { name: scan.name, status: 'error', label: scan.label + ': ' + e.message, elapsed: Math.round(performance.now() - t0) });
+    }
+  }
+
+  // Summary
+  send('complete', { totalFindings, scanCount: scans.length, results: Object.fromEntries(Object.entries(results).map(([k,v]) => [k, { elapsed: v.elapsed, findings: v.findings }])) });
+  res.end();
+});
+
 app.get('/api/models', (_, res) => res.json(MODELS));
 app.get('/api/costs', async (_, res) => {
   // Get live account usage from OpenRouter
