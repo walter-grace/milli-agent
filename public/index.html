@@ -297,8 +297,8 @@ function render() {
     app.appendChild(buildNav());
     const content = h('div',{className:'content'});
 
-    // Model tab bar — horizontal chips like OpenRouter
-    if (state.activeModels.length > 0 && state.models.length > 0) {
+    // Model tab bar — disabled, using sidebar checkboxes instead
+    if (false && state.activeModels.length > 0 && state.models.length > 0) {
       const modelBar = h('div',{style:{display:'flex',alignItems:'center',gap:'4px',padding:'6px 12px',borderBottom:'1px solid var(--border)',overflowX:'auto',flexShrink:0}});
       state.activeModels.forEach(mid => {
         const m = state.models.find(x => x.id === mid);
@@ -321,35 +321,73 @@ function render() {
         }
         modelBar.appendChild(chip);
       });
-      // + button to add model — shows dropdown of available models
-      const addWrap = h('div',{style:{position:'relative',flexShrink:0}});
-      const addBtn = h('button',{style:{width:'26px',height:'26px',borderRadius:'6px',border:'1px dashed var(--border)',background:'transparent',color:'var(--fg3)',cursor:'pointer',fontSize:'14px',display:'flex',alignItems:'center',justifyContent:'center',transition:'all .15s'},
-        onClick:()=>{
-          const existing = addWrap.querySelector('.model-dropdown');
-          if (existing) { existing.remove(); return; }
-          const dd = h('div',{className:'model-dropdown',style:{position:'absolute',top:'32px',right:0,width:'220px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:'var(--radius)',boxShadow:'var(--shadow-lg)',zIndex:50,padding:'6px',maxHeight:'240px',overflowY:'auto'}});
-          state.models.forEach(m => {
-            const active = state.activeModels.includes(m.id);
-            const row = h('button',{style:{display:'flex',alignItems:'center',gap:'8px',width:'100%',padding:'7px 10px',borderRadius:'6px',border:'none',background:active?'var(--bg3)':'transparent',color:active?'var(--fg)':'var(--fg3)',cursor:'pointer',fontSize:'12px',textAlign:'left',transition:'all .1s'},
-              onClick:()=>{
-                if (active) { if (state.activeModels.length>1) { state.activeModels=state.activeModels.filter(id=>id!==m.id); if(state.model===m.id)state.model=state.activeModels[0]; } }
-                else { state.activeModels.push(m.id); state.model=m.id; }
-                dd.remove(); render();
-              }});
-            const check = h('div',{style:{width:'14px',height:'14px',borderRadius:'4px',border:'1px solid '+(active?'var(--purple)':'var(--border)'),background:active?'var(--purple)':'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:'9px',color:'#fff'}});
-            if (active) check.textContent = '✓';
-            row.appendChild(check);
-            row.appendChild(h('span',null,m.name));
-            if (m.free) row.appendChild(h('span',{style:{marginLeft:'auto',fontSize:'9px',color:'var(--green)',fontWeight:600}},'free'));
-            dd.appendChild(row);
-          });
-          addWrap.appendChild(dd);
-          // Close on click outside
-          setTimeout(()=>{ document.addEventListener('click', function close(e) { if (!addWrap.contains(e.target)) { dd.remove(); document.removeEventListener('click',close); } }); },10);
-        }});
+      // + button to add model — shows dropdown
+      const addWrap = h('div',{style:{position:'relative',flexShrink:0,zIndex:60}});
+      const addBtn = document.createElement('button');
       addBtn.textContent = '+';
-      addBtn.addEventListener('mouseenter',()=>{addBtn.style.borderColor='var(--purple)';addBtn.style.color='var(--purple)';});
-      addBtn.addEventListener('mouseleave',()=>{addBtn.style.borderColor='var(--border)';addBtn.style.color='var(--fg3)';});
+      addBtn.style.cssText = 'width:28px;height:28px;border-radius:8px;border:1px dashed var(--border);background:transparent;color:var(--fg3);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all .15s;';
+      addBtn.onmouseenter = () => { addBtn.style.borderColor='var(--purple)'; addBtn.style.color='var(--purple)'; addBtn.style.background='rgba(139,92,246,.1)'; };
+      addBtn.onmouseleave = () => { addBtn.style.borderColor='var(--border)'; addBtn.style.color='var(--fg3)'; addBtn.style.background='transparent'; };
+      addBtn.onclick = (e) => {
+        e.stopPropagation();
+        // Remove existing dropdown
+        const old = document.getElementById('model-add-dropdown');
+        if (old) { old.remove(); return; }
+        // Position dropdown relative to button
+        const rect = addBtn.getBoundingClientRect();
+        // Build dropdown — append to body to avoid overflow clipping
+        const dd = document.createElement('div');
+        dd.id = 'model-add-dropdown';
+        dd.style.cssText = 'position:fixed;top:'+(rect.bottom+4)+'px;left:'+(rect.right-240)+'px;width:240px;background:#18181b;border:1px solid #3f3f46;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.5);padding:8px;max-height:280px;overflow-y:auto;z-index:9999;';
+        // Title
+        const title = document.createElement('div');
+        title.textContent = 'Add Models';
+        title.style.cssText = 'font-size:11px;color:var(--fg3);text-transform:uppercase;letter-spacing:1px;font-weight:600;padding:4px 8px 8px;';
+        dd.appendChild(title);
+        state.models.forEach(m => {
+          const active = state.activeModels.includes(m.id);
+          const row = document.createElement('button');
+          row.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border-radius:8px;border:none;background:'+(active?'var(--bg3)':'transparent')+';color:'+(active?'var(--fg)':'var(--fg3)')+';cursor:pointer;font-size:12px;text-align:left;transition:all .1s;font-family:inherit;';
+          row.onmouseenter = () => { if(!active) row.style.background='var(--bg3)'; };
+          row.onmouseleave = () => { if(!active) row.style.background='transparent'; };
+          row.onclick = (ev) => {
+            ev.stopPropagation();
+            if (active && state.activeModels.length > 1) {
+              state.activeModels = state.activeModels.filter(id => id !== m.id);
+              if (state.model === m.id) state.model = state.activeModels[0];
+            } else if (!active) {
+              state.activeModels.push(m.id);
+              state.model = m.id;
+            }
+            dd.remove();
+            render();
+          };
+          // Checkbox
+          const check = document.createElement('div');
+          check.style.cssText = 'width:16px;height:16px;border-radius:4px;border:2px solid '+(active?'var(--purple)':'var(--border)')+';background:'+(active?'var(--purple)':'transparent')+';display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:10px;color:#fff;';
+          if (active) check.textContent = '✓';
+          row.appendChild(check);
+          // Name
+          const name = document.createElement('span');
+          name.textContent = m.name;
+          name.style.cssText = 'flex:1;';
+          row.appendChild(name);
+          // Free badge
+          if (m.free) {
+            const badge = document.createElement('span');
+            badge.textContent = 'free';
+            badge.style.cssText = 'font-size:9px;color:var(--green);font-weight:700;';
+            row.appendChild(badge);
+          }
+          dd.appendChild(row);
+        });
+        document.body.appendChild(dd);
+        // Close on outside click
+        const closeHandler = (ev) => {
+          if (!dd.contains(ev.target) && ev.target !== addBtn) { dd.remove(); document.removeEventListener('click', closeHandler); }
+        };
+        setTimeout(() => document.addEventListener('click', closeHandler), 0);
+      };
       addWrap.appendChild(addBtn);
       modelBar.appendChild(addWrap);
       content.appendChild(modelBar);
@@ -496,6 +534,59 @@ function renderCodePane(filePath, content, highlightLine) {
       if (hl) hl.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }, 100);
   }
+}
+
+// Verification badge — show trust label after each response
+function chatShowVerification(report) {
+  if (!liveChatEl) return;
+  const colors = {
+    GROUNDED: 'var(--green)',
+    LIKELY_GROUNDED: 'var(--green)',
+    LOW_CONFIDENCE: 'var(--yellow)',
+    PARTIALLY_GROUNDED: 'var(--yellow)',
+    PARTIALLY_HALLUCINATED: '#f97316',
+    MOSTLY_HALLUCINATED: 'var(--red)',
+    PURE_FABRICATION: 'var(--red)',
+    UNGROUNDED: 'var(--red)',
+    UNKNOWN: 'var(--fg3)',
+    VERIFY_ERROR: 'var(--fg3)',
+  };
+  const color = colors[report.label] || 'var(--fg3)';
+  const icon = report.score >= 0.8 ? '✓' : report.score >= 0.5 ? '?' : '!';
+
+  const badge = h('div',{style:{
+    display:'flex',alignItems:'center',gap:'8px',padding:'8px 12px',marginTop:'6px',
+    borderRadius:'8px',border:'1px solid '+color,
+    background:color+'10',fontSize:'11px',fontFamily:'monospace',color:color,maxWidth:'85%',
+    cursor:'pointer'
+  }, onClick:()=>{
+    // Toggle detail view
+    const next = badge.nextSibling;
+    if (next && next.classList && next.classList.contains('verify-detail')) { next.remove(); return; }
+    const detail = h('div',{className:'verify-detail',style:{
+      padding:'10px 14px',marginTop:'4px',borderRadius:'8px',background:'var(--bg2)',
+      border:'1px solid var(--border)',fontSize:'10px',fontFamily:'monospace',color:'var(--fg3)',
+      maxWidth:'85%',whiteSpace:'pre-wrap',lineHeight:'1.6'
+    }});
+    let lines = [];
+    lines.push('Citations: ' + report.citations.verified + '/' + report.citations.total + ' verified');
+    if (report.citations.fabricated > 0) lines.push('Fabricated: ' + report.citations.fabricated);
+    if (report.citations.unverifiable > 0) lines.push('Unverifiable: ' + report.citations.unverifiable);
+    lines.push('Coverage: ' + (report.coverage.score*100).toFixed(0) + '% (' + report.coverage.matched_grams + '/' + report.coverage.total_grams + ' n-grams)');
+    lines.push('Tool calls: ' + report.ledger_size);
+    if (report.judge && !report.judge.skipped) {
+      lines.push('Judge (Claude): ' + report.judge.verdict + ' (' + (report.judge.confidence*100).toFixed(0) + '%)');
+      if (report.judge.summary) lines.push('  → ' + report.judge.summary);
+      if (report.judge.fabrication_count > 0) lines.push('  Fabricated claims: ' + report.judge.fabrication_count);
+    }
+    detail.textContent = lines.join('\n');
+    badge.parentNode.insertBefore(detail, badge.nextSibling);
+  }},
+    h('span',{style:{fontWeight:700}},icon),
+    h('span',null,report.label),
+    h('span',{style:{marginLeft:'auto',opacity:.7}},'trust ' + (report.score*100).toFixed(0) + '%'),
+  );
+  liveChatEl.appendChild(badge);
 }
 
 // Toast notifications
@@ -1089,6 +1180,7 @@ async function sendChat() {
             else if (eventType === 'tool_result') { for(let i=tcs.length-1;i>=0;i--){if(!tcs[i].result){tcs[i].result={elapsed:d.elapsed,bytes:d.bytes,matchCount:d.matchCount,preview:d.preview};break;}} last().toolCalls=[...tcs]; chatUpdateToolResult(d); chatUpdateStatus('thinking'); }
             else if (eventType === 'text_delta') { text+=d.content; last().content=text; chatUpdateStatus(null); chatAppendText(text); }
             else if (eventType === 'text_done') { last().content=d.content; last().stats=d.stats; if(d.stats?.sessionCost) state.sessionCost=d.stats.sessionCost; chatUpdateStatus(null); chatAppendText(d.content); chatFinish(d.stats); refreshNav(); }
+            else if (eventType === 'verification') { last().verification=d; chatShowVerification(d); }
             else if (eventType === 'error') { last().content='Error: '+(d.message||'Unknown'); chatUpdateStatus(null); chatAppendText('Error: '+(d.message||'Unknown')); chatFinish(null); }
           } catch(parseErr) { /* skip */ }
           eventType = null;
@@ -1371,13 +1463,15 @@ function renderCompare() {
   }
 
   if (Object.keys(cmpState.results).length > 0) {
-    const grid = h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px'}});
-    Object.entries(IMPLS).forEach(([id, impl]) => {
-      const r = cmpState.results[id];
+    const cols = Object.keys(cmpState.results).length <= 2 ? '1fr 1fr' : Object.keys(cmpState.results).length <= 4 ? '1fr 1fr' : '1fr 1fr 1fr';
+    const grid = h('div',{style:{display:'grid',gridTemplateColumns:cols,gap:'12px'}});
+    Object.entries(cmpState.results).forEach(([id, r]) => {
+      const modelName = r?.modelName || id.split('/').pop();
+      const modelColor = r?.fastest ? 'var(--green)' : 'var(--purple)';
       const card = h('div',{className:'rcard anim',style:{borderColor:r?.fastest?'var(--green)':'var(--border)'}});
       // Header
-      const hd = h('div',{className:'rhead',style:{borderTop:'2px solid '+impl.color}});
-      hd.appendChild(h('span',{style:{fontSize:'12px',fontWeight:600,color:impl.color}},impl.icon+' '+impl.name));
+      const hd = h('div',{className:'rhead',style:{borderTop:'2px solid '+modelColor}});
+      hd.appendChild(h('span',{style:{fontSize:'12px',fontWeight:600,color:modelColor}},modelName));
       if(r?.stats) { hd.appendChild(h('span',{style:{fontSize:'11px',fontFamily:'monospace',color:r.fastest?'var(--green)':'var(--fg3)',marginLeft:'8px'}},fmt(r.stats.totalMs))); hd.appendChild(h('span',{style:{marginLeft:'auto',fontSize:'10px',color:'var(--fg3)'}},r.stats.inTokens+'+'+r.stats.outTokens+' tok')); }
       if(r?.stats?.cost) hd.appendChild(h('span',{style:{fontSize:'10px',fontWeight:600,color:'var(--green)',marginLeft:'6px'}},'$'+r.stats.cost.toFixed(5)));
       if(r?.fastest) hd.appendChild(h('span',{style:{fontSize:'10px',fontWeight:700,color:'var(--green)',marginLeft:'6px'}},'FASTEST'));
@@ -1391,7 +1485,7 @@ function renderCompare() {
         (r.toolCalls||[]).forEach(tc => {
           const tcEl = h('div',{style:{marginBottom:'8px',border:'1px solid var(--bg3)',borderRadius:'8px',overflow:'hidden'}});
           tcEl.appendChild(h('div',{style:{padding:'4px 8px',background:'rgba(0,0,0,0.2)',color:'var(--fg2)',display:'flex',alignItems:'center',gap:'6px',fontSize:'11px'}},
-            h('span',{style:{color:impl.color}},impl.icon),
+            h('span',{style:{color:'var(--purple)'}},'▶'),
             h('code',{style:{color:'var(--purple)'}},tc.name||'tool'),
             tc.result?h('span',{style:{marginLeft:'auto',color:'var(--green)',fontFamily:'monospace',fontWeight:600,fontSize:'10px'}},fmt(tc.result.elapsed)+' · '+tc.result.matchCount+' hits'):h('span',{className:'spinner'}),
           ));
@@ -1405,7 +1499,7 @@ function renderCompare() {
     });
     resultsArea.appendChild(grid);
   } else if(!cmpState.userMsg) {
-    resultsArea.appendChild(h('div',{style:{textAlign:'center',color:'var(--fg3)',paddingTop:'60px',fontSize:'14px'}},'Send a message to race all 4 servers'));
+    resultsArea.appendChild(h('div',{style:{textAlign:'center',color:'var(--fg3)',paddingTop:'60px',fontSize:'14px'}},'Add models with + above, then send a message to race them'));
   }
   div.appendChild(resultsArea);
 
@@ -1446,7 +1540,6 @@ function scheduleCompareUpdate() {
 }
 
 function renderCardHTML(implId) {
-  const impl = IMPLS[implId];
   const r = cmpState.results[implId];
   let html = '';
 
@@ -1459,7 +1552,7 @@ function renderCardHTML(implId) {
     (r.toolCalls||[]).forEach(tc => {
       html += '<div style="margin-bottom:8px;border:1px solid var(--bg3);border-radius:8px;overflow:hidden">';
       html += '<div style="padding:4px 8px;background:rgba(0,0,0,0.2);color:var(--fg2);display:flex;align-items:center;gap:6px;font-size:11px">';
-      html += '<span style="color:'+impl.color+'">'+impl.icon+'</span>';
+      html += '<span style="color:var(--purple)">▶</span>';
       html += '<code style="color:var(--purple)">'+(tc.name||'tool')+'</code>';
       if (tc.result) {
         html += '<span style="margin-left:auto;color:var(--green);font-family:monospace;font-weight:600;font-size:10px">'+fmt(tc.result.elapsed)+' · '+tc.result.matchCount+' hits</span>';
@@ -1490,9 +1583,10 @@ function renderCardHTML(implId) {
 }
 
 function renderCardHeaderHTML(implId) {
-  const impl = IMPLS[implId];
   const r = cmpState.results[implId];
-  let html = '<span style="font-size:12px;font-weight:600;color:'+impl.color+'">'+impl.icon+' '+impl.name+'</span>';
+  const modelName = r?.modelName || implId.split('/').pop();
+  const col = r?.fastest ? 'var(--green)' : 'var(--purple)';
+  let html = '<span style="font-size:12px;font-weight:600;color:'+col+'">'+modelName+'</span>';
   if (r?.stats) {
     const col = r.fastest ? 'var(--green)' : 'var(--fg3)';
     html += '<span style="font-size:11px;font-family:monospace;color:'+col+';margin-left:4px">'+fmt(r.stats.totalMs)+'</span>';
@@ -1510,11 +1604,16 @@ function initCompareGrid() {
   if (cmpState.userMsg) {
     area.innerHTML = '<div style="margin-bottom:16px;padding:10px 14px;background:var(--fg);color:var(--bg);border-radius:12px;max-width:70%;margin-left:auto;font-size:14px">'+cmpState.userMsg.replace(/</g,'&lt;')+'</div>';
   }
-  let gridHTML = '<div id="compare-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">';
-  Object.entries(IMPLS).forEach(([id, impl]) => {
-    gridHTML += '<div id="cmp-card-'+id+'" style="border-radius:12px;border:1px solid var(--border);overflow:hidden;background:var(--bg2);transition:border-color 0.3s">';
-    gridHTML += '<div id="cmp-head-'+id+'" style="display:flex;align-items:center;gap:6px;padding:8px 12px;border-bottom:1px solid var(--bg3);border-top:2px solid '+impl.color+'">'+renderCardHeaderHTML(id)+'</div>';
-    gridHTML += '<div id="cmp-body-'+id+'" style="padding:10px;max-height:350px;overflow-y:auto">'+renderCardHTML(id)+'</div>';
+  const resultKeys = Object.keys(cmpState.results);
+  const cols = resultKeys.length <= 2 ? '1fr 1fr' : resultKeys.length <= 4 ? '1fr 1fr' : '1fr 1fr 1fr';
+  let gridHTML = '<div id="compare-grid" style="display:grid;grid-template-columns:'+cols+';gap:12px">';
+  resultKeys.forEach(id => {
+    const r = cmpState.results[id];
+    const col = r?.fastest ? 'var(--green)' : 'var(--purple)';
+    const safeId = id.replace(/[^a-zA-Z0-9]/g, '_');
+    gridHTML += '<div id="cmp-card-'+safeId+'" style="border-radius:12px;border:1px solid var(--border);overflow:hidden;background:var(--bg2);transition:border-color 0.3s">';
+    gridHTML += '<div id="cmp-head-'+safeId+'" style="display:flex;align-items:center;gap:6px;padding:8px 12px;border-bottom:1px solid var(--bg3);border-top:2px solid '+col+'">'+renderCardHeaderHTML(id)+'</div>';
+    gridHTML += '<div id="cmp-body-'+safeId+'" style="padding:10px;max-height:350px;overflow-y:auto">'+renderCardHTML(id)+'</div>';
     gridHTML += '</div>';
   });
   gridHTML += '</div>';
@@ -1526,20 +1625,33 @@ function doCompareUpdate() {
     initCompareGrid();
     return;
   }
-  Object.keys(IMPLS).forEach(id => {
+  Object.keys(cmpState.results).forEach(id => {
     const r = cmpState.results[id];
-    const card = document.getElementById('cmp-card-'+id);
+    const safeId = id.replace(/[^a-zA-Z0-9]/g, '_');
+    const card = document.getElementById('cmp-card-'+safeId);
     if (!card) return;
     card.style.borderColor = r?.fastest ? 'var(--green)' : 'var(--border)';
-    const head = document.getElementById('cmp-head-'+id);
+    const head = document.getElementById('cmp-head-'+safeId);
     if (head) head.innerHTML = renderCardHeaderHTML(id);
-    const body = document.getElementById('cmp-body-'+id);
+    const body = document.getElementById('cmp-body-'+safeId);
     if (body) body.innerHTML = renderCardHTML(id);
   });
 }
 
 function updateCompareResults() {
-  scheduleCompareUpdate();
+  // Force re-render the compare tab if it's active
+  if (state.tab === 'compare') {
+    const area = document.getElementById('compare-results');
+    if (area) {
+      area.innerHTML = '';
+      if (cmpState.userMsg) {
+        area.innerHTML = '<div style="margin-bottom:16px;padding:10px 14px;background:linear-gradient(135deg,var(--purple),#7c3aed);color:#fff;border-radius:12px;max-width:70%;margin-left:auto;font-size:14px">'+cmpState.userMsg.replace(/</g,'&lt;')+'</div>';
+      }
+      if (Object.keys(cmpState.results).length > 0) {
+        initCompareGrid();
+      }
+    }
+  }
 }
 
 async function sendCompare() {
@@ -1551,20 +1663,23 @@ async function sendCompare() {
   if(compareInput) compareInput.value = '';
   cmpState.sending = true;
   cmpState.results = {};
-  Object.keys(IMPLS).forEach(id => { cmpState.results[id] = {status:'thinking',content:'',toolCalls:[],stats:null,done:false,fastest:false}; });
+
+  // Race active MODELS (not servers) — each model gets its own card
+  const modelsToRace = state.activeModels.length > 0 ? state.activeModels : [state.model];
+  modelsToRace.forEach(mid => {
+    const m = state.models.find(x => x.id === mid);
+    cmpState.results[mid] = {status:'thinking',content:'',toolCalls:[],stats:null,done:false,fastest:false,modelName:m?.name||mid};
+  });
   updateCompareResults();
 
   let completedCount = 0;
   const completionTimes = {};
-  const implIds = Object.keys(IMPLS);
 
-  const delay = (ms) => new Promise(r => setTimeout(r, ms));
-  await Promise.all(implIds.map(async (implId, idx) => {
-    await delay(idx * 1500); // stagger 1.5s apart to avoid rate limiting
+  await Promise.all(modelsToRace.map(async (modelId) => {
     try {
       const response = await fetch('/api/chat/stream', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({message:content, model:state.model, impl:implId, history:[]}),
+        body: JSON.stringify({message:content, model:modelId, impl:state.impl, history:[]}),
       });
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -1579,14 +1694,14 @@ async function sendCompare() {
           else if(line.startsWith('data: ')&&evt) {
             try {
               const d=JSON.parse(line.slice(6));
-              if(evt==='status'){cmpState.results[implId].status=d.type;updateCompareResults();}
-              else if(evt==='tool_call'){tcs.push({name:d.name,args:d.args,impl:implId,result:null});cmpState.results[implId].toolCalls=[...tcs];cmpState.results[implId].status='searching';updateCompareResults();}
-              else if(evt==='tool_result'){for(let i=tcs.length-1;i>=0;i--){if(!tcs[i].result){tcs[i].result={elapsed:d.elapsed,bytes:d.bytes,matchCount:d.matchCount,preview:d.preview};break;}}cmpState.results[implId].toolCalls=[...tcs];cmpState.results[implId].status='thinking';updateCompareResults();}
-              else if(evt==='text_delta'){text+=d.content;cmpState.results[implId].content=text;cmpState.results[implId].status=null;updateCompareResults();}
+              if(evt==='status'){cmpState.results[modelId].status=d.type;updateCompareResults();}
+              else if(evt==='tool_call'){tcs.push({name:d.name,args:d.args,impl:d.impl,result:null});cmpState.results[modelId].toolCalls=[...tcs];cmpState.results[modelId].status='searching';updateCompareResults();}
+              else if(evt==='tool_result'){for(let i=tcs.length-1;i>=0;i--){if(!tcs[i].result){tcs[i].result={elapsed:d.elapsed,bytes:d.bytes,matchCount:d.matchCount,preview:d.preview};break;}}cmpState.results[modelId].toolCalls=[...tcs];cmpState.results[modelId].status='thinking';updateCompareResults();}
+              else if(evt==='text_delta'){text+=d.content;cmpState.results[modelId].content=text;cmpState.results[modelId].status=null;updateCompareResults();}
               else if(evt==='text_done'){
-                cmpState.results[implId].content=d.content;cmpState.results[implId].stats=d.stats;cmpState.results[implId].status=null;cmpState.results[implId].done=true;
-                completionTimes[implId]=d.stats?.totalMs||999999;completedCount++;
-                if(completedCount===implIds.length){const fastest=Object.entries(completionTimes).sort((a,b)=>a[1]-b[1])[0][0];cmpState.results[fastest].fastest=true;}
+                cmpState.results[modelId].content=d.content;cmpState.results[modelId].stats=d.stats;cmpState.results[modelId].status=null;cmpState.results[modelId].done=true;
+                completionTimes[modelId]=d.stats?.totalMs||999999;completedCount++;
+                if(completedCount===modelsToRace.length){const fastest=Object.entries(completionTimes).sort((a,b)=>a[1]-b[1])[0][0];cmpState.results[fastest].fastest=true;}
                 updateCompareResults();
               }
             }catch{}
@@ -1596,7 +1711,7 @@ async function sendCompare() {
         if(done) break;
       }
     } catch(err) {
-      cmpState.results[implId].content='Error: '+err.message;cmpState.results[implId].status=null;cmpState.results[implId].done=true;completedCount++;updateCompareResults();
+      cmpState.results[modelId].content='Error: '+err.message;cmpState.results[modelId].status=null;cmpState.results[modelId].done=true;completedCount++;updateCompareResults();
     }
   }));
   cmpState.sending=false; updateCompareResults();

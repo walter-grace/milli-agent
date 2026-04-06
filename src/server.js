@@ -6,6 +6,7 @@ import { resolve } from 'path';
 import { homedir } from 'os';
 import { existsSync, mkdirSync } from 'fs';
 import { ALL_TOOLS, executeTool } from './tools.js';
+import { ReceiptLedger, verify, quorumDiff } from './verifier.js';
 
 const app = express();
 app.use(cors());
@@ -381,6 +382,8 @@ STRATEGY:
 4. For security: security_scan then read_file on flagged files
 5. Be specific: name files, line numbers. Use targeted regex patterns.
 6. Chain tools: search → read → analyze. Don't stop at search results.
+6a. CITATION REQUIREMENT: When stating facts about code, ALWAYS cite the file path and line number in the format \`path/file.ext:42\`. Quote actual code in backticks. Tool results are prefixed with [receipt:XXXX] — your output will be verified against the actual files.
+6b. NEVER fabricate file paths, line numbers, or code that doesn't appear in tool results. If you don't know, run more tools. Hallucinated citations are auto-flagged as fabricated.
 7. For security reviews: deep_security_scan → dependency_audit → secrets_scan → read_file on flagged files
 8. Compare models: use different models on the same security scan to find what each catches
 9. For self-healing: self_heal → identify issues → code_edit to fix → sandbox_exec to test → repeat until green
@@ -395,6 +398,7 @@ STRATEGY:
 
   const totalStart = performance.now();
   let totalToolCalls = 0, totalMcpMs = 0, totalInTok = 0, totalOutTok = 0;
+  const ledger = new ReceiptLedger(); // tool-call receipts for verification
 
   for (let round = 0; round < 6; round++) {
     try {
@@ -441,9 +445,13 @@ STRATEGY:
               const result = await server.search(args);
               totalToolCalls++;
               totalMcpMs += result.elapsed;
-              content = result.text.length > 4000 ? result.text.slice(0, 4000) + '\n...(truncated)' : result.text;
-              const matchLines = result.text.split('\n').filter(l => l.trim()).slice(0, 30);
-              send('tool_result', { id: tc.id, impl, elapsed: result.elapsed, bytes: result.bytes, matchCount: matchLines.length, preview: matchLines.slice(0, 15) });
+              const fullText = result.text;
+              content = fullText.length > 4000 ? fullText.slice(0, 4000) + '\n...(truncated)' : fullText;
+              // Record receipt with full output (not truncated) for verification
+              const receiptId = ledger.record(tc.function.name, args, fullText);
+              content = `[receipt:${receiptId}]\n` + content;
+              const matchLines = fullText.split('\n').filter(l => l.trim()).slice(0, 30);
+              send('tool_result', { id: tc.id, impl, elapsed: result.elapsed, bytes: result.bytes, matchCount: matchLines.length, preview: matchLines.slice(0, 15), receipt: receiptId });
 
             } else {
               // All other tools (Tier 1-4)
@@ -451,10 +459,12 @@ STRATEGY:
               if (result !== null) {
                 totalToolCalls++;
                 const elapsed = Math.round(performance.now() - toolStart);
-                content = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-                if (content.length > 6000) content = content.slice(0, 6000) + '\n...(truncated)';
-                const lines = content.split('\n').filter(l => l.trim()).slice(0, 30);
-                send('tool_result', { id: tc.id, impl: 'system', elapsed, bytes: content.length, matchCount: lines.length, preview: lines.slice(0, 15) });
+                const fullText = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+                content = fullText.length > 6000 ? fullText.slice(0, 6000) + '\n...(truncated)' : fullText;
+                const receiptId = ledger.record(tc.function.name, args, fullText);
+                content = `[receipt:${receiptId}]\n` + content;
+                const lines = fullText.split('\n').filter(l => l.trim()).slice(0, 30);
+                send('tool_result', { id: tc.id, impl: 'system', elapsed, bytes: fullText.length, matchCount: lines.length, preview: lines.slice(0, 15), receipt: receiptId });
               } else {
                 content = `Unknown tool: ${tc.function.name}`;
                 send('tool_error', { id: tc.id, error: content });
@@ -498,6 +508,21 @@ STRATEGY:
             sessionRequests: sessionCosts.requests,
           },
         });
+
+        // Verification phase — fire and forget the deterministic checks,
+        // optionally include frontier judge for low-confidence responses
+        try {
+          const useJudge = req.body.verify_with_judge !== false && totalToolCalls > 0;
+          const trustReport = await verify(content, ledger, {
+            useJudge,
+            apiKey: process.env.OPENROUTER_API_KEY,
+            model: 'anthropic/claude-opus-4-6',
+          });
+          send('verification', trustReport);
+        } catch (e) {
+          console.log('  Verification failed:', e.message);
+          send('verification', { label: 'VERIFY_ERROR', error: e.message });
+        }
         break;
       }
 
