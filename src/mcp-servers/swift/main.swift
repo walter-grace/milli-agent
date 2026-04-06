@@ -23,7 +23,11 @@ func grepSearch(args: [String: Any]) -> String {
     let maxResults = args["max_results"] as? Int ?? 100
 
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/Users/bigneek/.cargo/bin/rg")
+    // Find rg in common locations
+    let rgPaths = ["/usr/bin/rg", "/usr/local/bin/rg", "/opt/homebrew/bin/rg",
+                   NSHomeDirectory() + "/.cargo/bin/rg"]
+    let rgPath = rgPaths.first { FileManager.default.fileExists(atPath: $0) } ?? "rg"
+    process.executableURL = URL(fileURLWithPath: rgPath)
     var arguments = ["--no-heading", "-n", "-m", String(maxResults)]
     if caseInsensitive { arguments.append("-i") }
     if let g = globFilter { arguments += ["--glob", g] }
