@@ -106,7 +106,7 @@ const IMPLS = {cpp:{name:'C++',color:'#00a0e4',icon:'⚡'},rust:{name:'Rust',col
 const fmt = ms => ms<1000?Math.round(ms)+'ms':(ms/1000).toFixed(1)+'s';
 const h = (tag, props, ...kids) => { const el=document.createElement(tag); if(props) Object.entries(props).forEach(([k,v])=>{ if(k==='style'&&typeof v==='object') Object.assign(el.style,v); else if(k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(),v); else if(k==='className') el.className=v; else if(k==='innerHTML') el.innerHTML=v; else el.setAttribute(k,v); }); kids.flat(9).forEach(c=>{ if(c==null)return; el.appendChild(typeof c==='string'?document.createTextNode(c):c); }); return el; };
 
-let state = { tab:'search', model:'google/gemma-4-26b-a4b-it', impl:'cpp', models:[], ready:0, msgs:[], input:'', sending:false, racePattern:'', racePath:'https://github.com/walter-grace/milli-agent', raceResults:{}, raceWinner:null, racing:false, sessionCost:0, accountCost:0 };
+let state = { tab:'search', model:'google/gemma-4-26b-a4b-it', impl:'cpp', models:[], ready:0, msgs:[], input:'', sending:false, racePattern:'', racePath:'https://github.com/walter-grace/milli-agent', raceResults:{}, raceWinner:null, racing:false, sessionCost:0, accountCost:0, cacheHits:0, cacheSaved:0 };
 let currentTab = null;
 let chatInput = null; // persistent textarea ref
 let raceInput = null; // persistent race input ref
@@ -149,6 +149,9 @@ function buildNav() {
     h('div',{style:{flex:1}}),
     state.sessionCost > 0 ? h('span',{style:{fontSize:'11px',color:'var(--green)',fontWeight:600,marginRight:'12px',fontFamily:'monospace'}},
       '$'+state.sessionCost.toFixed(4)+' spent'
+    ) : null,
+    state.cacheHits > 0 ? h('span',{style:{fontSize:'10px',color:'#8b5cf6',fontFamily:'monospace',marginRight:'8px'}},
+      'cache:'+state.cacheHits+'hits/'+Math.round(state.cacheSaved/1000)+'k tok'
     ) : null,
     h('span',{style:{fontSize:'11px',color:'var(--fg3)',display:'flex',alignItems:'center',gap:'6px',marginRight:'8px'}},
       h('span',{style:{width:'6px',height:'6px',borderRadius:'50%',background:state.ready===4?'var(--green)':'#eab308',display:'inline-block'}}),
@@ -1265,7 +1268,7 @@ async function runAPIRace() {
 // Init
 fetch('/api/models').then(r=>r.json()).then(m=>{state.models=m; render();}).catch(()=>render());
 fetch('/api/warmup',{method:'POST'}).then(r=>r.json()).then(s=>{state.ready=Object.values(s).filter(x=>x.ready).length; render();}).catch(()=>{});
-fetch('/api/costs').then(r=>r.json()).then(c=>{if(c.session) state.sessionCost=c.session.totalCost; if(c.account) state.accountCost=c.account.total; refreshNav();}).catch(()=>{});
+fetch('/api/costs').then(r=>r.json()).then(c=>{if(c.session) state.sessionCost=c.session.totalCost; if(c.account) state.accountCost=c.account.total; if(c.cache){state.cacheHits=c.cache.hits;state.cacheSaved=c.cache.savedTokens;} refreshNav();}).catch(()=>{});
 render();
 </script>
 </body>

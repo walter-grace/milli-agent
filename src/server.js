@@ -206,6 +206,48 @@ const CLONE_TOOL = {
   },
 };
 
+// Prompt caching — adds cache_control breakpoints for Anthropic models via OpenRouter
+// System prompt + tool definitions are the stable prefix (~2000 tokens)
+// Conversation history grows but older messages are cacheable
+const cacheStats = { hits: 0, writes: 0, savedTokens: 0 };
+
+function applyCacheControl(messages, model) {
+  // Apply cache_control for all models via OpenRouter
+  // OpenRouter passes cache_control to providers that support it (Anthropic, Google, OpenAI)
+  // For providers that don't support it, they simply ignore the field — no harm done
+
+  return messages.map((msg, idx) => {
+    // Cache the system prompt — this is our biggest stable prefix (18 tools + strategy)
+    if (msg.role === 'system') {
+      return {
+        ...msg,
+        content: [{
+          type: 'text',
+          text: msg.content,
+          cache_control: { type: 'ephemeral' }
+        }]
+      };
+    }
+
+    // Cache all messages except the very last user message (which is new)
+    // This means conversation history gets cached across turns
+    if (idx < messages.length - 1 && (msg.role === 'user' || msg.role === 'assistant')) {
+      if (typeof msg.content === 'string' && msg.content.length > 100) {
+        return {
+          ...msg,
+          content: [{
+            type: 'text',
+            text: msg.content,
+            cache_control: { type: 'ephemeral' }
+          }]
+        };
+      }
+    }
+
+    return msg;
+  });
+}
+
 async function chatWithRetry(messages, model, maxRetries = 3) {
   const isLocal = model === 'local' || model.startsWith('local/');
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -217,6 +259,9 @@ async function chatWithRetry(messages, model, maxRetries = 3) {
     : { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' };
   const bodyModel = isLocal ? LOCAL_LLM_MODEL : model;
 
+  // Apply prompt caching for supported models
+  const cachedMessages = isLocal ? messages : applyCacheControl(messages, model);
+
   for (let i = 0; i < maxRetries; i++) {
     const controller = new AbortController();
     const timeoutMs = isLocal ? 120000 : 45000; // local models get 2min
@@ -225,7 +270,7 @@ async function chatWithRetry(messages, model, maxRetries = 3) {
       const resp = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ model: bodyModel, messages, tools: [GREP_TOOL, CLONE_TOOL, ...ALL_TOOLS], tool_choice: 'auto' }),
+        body: JSON.stringify({ model: bodyModel, messages: cachedMessages, tools: [GREP_TOOL, CLONE_TOOL, ...ALL_TOOLS], tool_choice: 'auto' }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -235,7 +280,28 @@ async function chatWithRetry(messages, model, maxRetries = 3) {
         continue;
       }
       if (!resp.ok) throw new Error(`API ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
-      return resp.json();
+      const result = await resp.json();
+
+      // Track cache stats from response (works across providers)
+      const usage = result.usage || {};
+      // Anthropic: cache_read_input_tokens / cache_creation_input_tokens
+      // OpenAI: cached_tokens (in prompt_tokens_details)
+      // Google: cachedContentTokenCount
+      const cachedRead = usage.cache_read_input_tokens || usage.cached_tokens || usage.prompt_tokens_details?.cached_tokens || 0;
+      const cachedWrite = usage.cache_creation_input_tokens || 0;
+      if (cachedRead > 0) {
+        cacheStats.hits++;
+        cacheStats.savedTokens += cachedRead;
+        const pricing = MODEL_PRICING[model] || { input: 0.13 };
+        const saved = cachedRead * pricing.input * 0.9 / 1_000_000; // 90% discount on cached tokens
+        console.log(`  [Cache HIT: ${cachedRead} tokens cached, saved ~$${saved.toFixed(6)}]`);
+      }
+      if (cachedWrite > 0) {
+        cacheStats.writes++;
+        console.log(`  [Cache WRITE: ${cachedWrite} tokens written to cache]`);
+      }
+
+      return result;
     } catch (err) {
       clearTimeout(timeout);
       if (err.name === 'AbortError') {
@@ -681,7 +747,7 @@ app.get('/api/costs', async (_, res) => {
     const d = await r.json();
     accountUsage = { total: d.data?.usage || 0, daily: d.data?.usage_daily || 0 };
   } catch {}
-  res.json({ session: sessionCosts, account: accountUsage, pricing: MODEL_PRICING });
+  res.json({ session: sessionCosts, account: accountUsage, pricing: MODEL_PRICING, cache: cacheStats });
 });
 app.get('/api/impls', (_, res) => res.json(Object.keys(IMPL_CONFIGS).map(k => ({ id: k, ...IMPL_CONFIGS[k], color: { rust:'#f74c00', cpp:'#00599c', swift:'#f05138', python:'#3776ab' }[k] }))));
 app.post('/api/warmup', async (_, res) => {
