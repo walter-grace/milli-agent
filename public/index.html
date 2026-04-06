@@ -334,16 +334,44 @@ function renderToolCard(tc) {
 function buildMsgList() {
   const inner = h('div',{className:'messages-inner'});
   if(state.msgs.length===0) {
-    const empty = h('div',{className:'empty'},
-      h('div',{className:'empty-icon'},'🔍'),
-      h('h2',{style:{fontSize:'20px',fontWeight:700,marginBottom:'8px'}},'Milli-Agent'),
-      h('p',{style:{fontSize:'14px',color:'var(--fg3)',textAlign:'center',maxWidth:'400px',lineHeight:1.5}},'Millisecond code search. Paste a GitHub URL and I\'ll clone and search it.'),
-    );
-    const grid = h('div',{className:'sugg-grid'});
-    ['Clone https://github.com/walter-grace/milli-agent and find all TODO comments','Clone https://github.com/sipeed/picoclaw and search for tool definitions','Clone https://github.com/siddharthvaddem/openscreen and find all functions','Clone https://github.com/exo-explore/exo and search for error handling'].forEach(s => {
-      grid.appendChild(h('button',{className:'sugg',onClick:()=>{chatInput.value=s; state.input=s; updateSendBtn();}},s));
+    const empty = h('div',{className:'empty'});
+
+    // Category cards — like OpenRouter's 2x2 grid
+    const cardGrid = h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px',width:'100%',maxWidth:'600px',marginBottom:'32px'}});
+
+    const categories = [
+      { title:'Security Review', desc:'OWASP scan + CVE audit + secret detection', icon:'🛡', prompt:'Clone https://github.com/expressjs/express and run a full security review. Use deep_security_scan, dependency_audit, and secrets_scan.' },
+      { title:'Code Intelligence', desc:'Architecture + dependencies + knowledge graph', icon:'🧠', prompt:'Clone https://github.com/walter-grace/milli-agent and build a knowledge_graph depth=3. Then show repo_summary and code_stats.' },
+      { title:'Self-Heal', desc:'Find bugs, generate fixes, test in sandbox', icon:'🧬', prompt:'Clone https://github.com/walter-grace/milli-agent and run self_heal. Identify any issues and suggest fixes.' },
+      { title:'API Analysis', desc:'Parse OpenAPI specs, search endpoints', icon:'📡', prompt:'Clone https://github.com/cloudflare/api-schemas and use openapi_search to find all DNS-related endpoints. Show schemas too.' },
+    ];
+
+    categories.forEach(cat => {
+      const card = h('div',{style:{padding:'20px',borderRadius:'var(--radius)',border:'1px solid var(--border)',background:'var(--bg2)',cursor:'pointer',transition:'all .2s'},
+        onClick:()=>{chatInput.value=cat.prompt; state.input=cat.prompt; updateSendBtn();}});
+      card.addEventListener('mouseenter',()=>{card.style.borderColor='var(--purple)';card.style.transform='translateY(-2px)';card.style.boxShadow='var(--shadow-md)';});
+      card.addEventListener('mouseleave',()=>{card.style.borderColor='var(--border)';card.style.transform='';card.style.boxShadow='';});
+      card.appendChild(h('div',{style:{fontSize:'15px',fontWeight:600,marginBottom:'6px'}},cat.title));
+      card.appendChild(h('div',{style:{fontSize:'12px',color:'var(--fg3)',lineHeight:'1.4',marginBottom:'12px'}},cat.desc));
+      card.appendChild(h('div',{style:{fontSize:'20px'}},cat.icon));
+      cardGrid.appendChild(card);
     });
-    empty.appendChild(grid);
+    empty.appendChild(cardGrid);
+
+    // Horizontal scrolling prompt chips
+    const chipScroll = h('div',{style:{display:'flex',gap:'8px',overflowX:'auto',width:'100%',maxWidth:'600px',paddingBottom:'8px'}});
+    const chips = [
+      ['Find TODOs','Clone milli-agent and find all TODO comments'],
+      ['Compare repos','Compare https://github.com/expressjs/express with https://github.com/fastify/fastify'],
+      ['Git analysis','Clone milli-agent and show git_summary, git_effort, and git_authors'],
+      ['Port exposure','Clone milli-agent and run port_scan to check for exposed ports'],
+      ['File timeline','Clone milli-agent and run git_timeline on src/server.js'],
+    ];
+    chips.forEach(([label,prompt]) => {
+      chipScroll.appendChild(h('button',{className:'pre',style:{whiteSpace:'nowrap',flexShrink:0,padding:'6px 14px'},onClick:()=>{chatInput.value=prompt; state.input=prompt; updateSendBtn();}},label));
+    });
+    empty.appendChild(chipScroll);
+
     inner.appendChild(empty);
   } else {
     state.msgs.forEach(msg => {
@@ -577,14 +605,20 @@ function renderChat() {
   main.appendChild(msgArea);
   setTimeout(()=>{ msgArea.scrollTop = msgArea.scrollHeight; },50);
 
-  // Input - created once, never destroyed
+  // Rich input area — inspired by OpenRouter
   const inputArea = h('div',{className:'input-area'});
   const wrap = h('div',{className:'input-wrap'});
 
+  // Input container with toolbar below
+  const inputBox = h('div',{style:{borderRadius:'var(--radius)',border:'1px solid var(--border)',background:'var(--bg2)',overflow:'hidden',transition:'border-color .2s, box-shadow .2s'}});
+  inputBox.addEventListener('focusin',()=>{inputBox.style.borderColor='var(--purple)';inputBox.style.boxShadow='0 0 0 3px rgba(139,92,246,.15)';});
+  inputBox.addEventListener('focusout',()=>{inputBox.style.borderColor='var(--border)';inputBox.style.boxShadow='';});
+
   chatInput = document.createElement('textarea');
   chatInput.rows = 1;
-  chatInput.placeholder = 'Ask AI...';
+  chatInput.placeholder = 'Ask Milli-Agent anything... (paste a GitHub URL to clone and analyze)';
   chatInput.value = state.input;
+  chatInput.style.cssText = 'width:100%;resize:none;border:none;background:transparent;padding:14px 16px 8px;font-size:14px;color:var(--fg);outline:none;font-family:inherit;line-height:1.5;';
   chatInput.addEventListener('input', e => {
     state.input = e.target.value;
     e.target.style.height = 'auto';
@@ -594,14 +628,35 @@ function renderChat() {
   chatInput.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
   });
+  inputBox.appendChild(chatInput);
 
-  const btn = h('button',{id:'send-btn',className:'send-btn',onClick:sendChat},'↑');
-  updateSendBtn();
+  // Toolbar row — model selector, server, send button
+  const toolbar = h('div',{style:{display:'flex',alignItems:'center',gap:'8px',padding:'4px 10px 8px',borderTop:'1px solid rgba(255,255,255,.03)'}});
 
-  wrap.appendChild(chatInput);
-  wrap.appendChild(btn);
+  // Model selector inline
+  const modelSel = renderSelect('sel',state.model,state.models.map(m=>({value:m.id,label:m.name+(m.free?' ✦':'')})),v=>{state.model=v;});
+  modelSel.style.cssText = 'height:26px;font-size:11px;border-radius:6px;background:var(--bg3);border:1px solid transparent;color:var(--fg2);padding:0 6px;';
+  toolbar.appendChild(modelSel);
+
+  // Server selector inline
+  const implSel = renderSelect('sel',state.impl,Object.entries(IMPLS).map(([k,v])=>({value:k,label:v.icon+' '+v.name})),v=>{state.impl=v;});
+  implSel.style.cssText = 'height:26px;font-size:11px;border-radius:6px;background:var(--bg3);border:1px solid transparent;color:var(--fg2);padding:0 6px;';
+  toolbar.appendChild(implSel);
+
+  // Tool count badge
+  toolbar.appendChild(h('span',{style:{fontSize:'10px',color:'var(--fg3)',fontFamily:'monospace',padding:'2px 8px',borderRadius:'4px',background:'var(--bg3)'}},'27 tools'));
+
+  toolbar.appendChild(h('div',{style:{flex:1}}));
+
+  // Send button
+  const btn = h('button',{id:'send-btn',style:{width:'32px',height:'32px',borderRadius:'8px',border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',transition:'all .15s'},onClick:sendChat},'↑');
+  toolbar.appendChild(btn);
+  inputBox.appendChild(toolbar);
+
+  wrap.appendChild(inputBox);
   inputArea.appendChild(wrap);
   main.appendChild(inputArea);
+  updateSendBtn();
 
   setTimeout(() => chatInput.focus(), 100);
   return main;
