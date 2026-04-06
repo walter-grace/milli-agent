@@ -6,6 +6,8 @@ RUN apt-get update && apt-get install -y \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y \
     nodejs ripgrep python3 python3-pip g++ git xz-utils \
+    fd-find universal-ctags difftastic shellcheck \
+    && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/*
 
 # Install semgrep for deep security scanning
@@ -14,6 +16,9 @@ RUN pip3 install semgrep --break-system-packages 2>/dev/null || echo "semgrep in
 # Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install ast-grep via cargo (after Rust)
+RUN cargo install ast-grep --locked 2>&1 | tail -2 || echo "ast-grep install skipped"
 
 # Install Zig
 RUN curl -L "https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz" -o /tmp/zig.tar.xz \

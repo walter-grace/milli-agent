@@ -539,6 +539,75 @@ export const OPENAPI_SEARCH_TOOL = {
 };
 
 // ═══════════════════════════════════════════
+// TIER 9 — AST + Structural Analysis
+// ═══════════════════════════════════════════
+
+export const AST_SEARCH_TOOL = {
+  type: 'function',
+  function: {
+    name: 'ast_search',
+    description: 'Structural code search using ast-grep. Match AST patterns, not text. Supports JS/TS/Python/Go/Rust/C/C++/Java. Use $$$ for any args, $VAR for capture. Example: pattern="console.log($$$ARGS)" finds all console.log calls.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File or directory to search' },
+        pattern: { type: 'string', description: 'AST pattern (e.g. "function $NAME($$$) { $$$BODY }")' },
+        language: { type: 'string', description: 'Language: js, ts, py, go, rust, c, cpp, java' },
+      },
+      required: ['path', 'pattern'],
+    },
+  },
+};
+
+export const SYMBOL_MAP_TOOL = {
+  type: 'function',
+  function: {
+    name: 'symbol_map',
+    description: 'Build a complete symbol map of a repo using universal-ctags. Returns JSON of all functions, classes, methods, variables across all files. Use this FIRST when exploring an unknown repo to get instant orientation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Repo path' },
+        kind: { type: 'string', description: 'Filter by kind: function, class, method, variable, type. Default: all' },
+      },
+      required: ['path'],
+    },
+  },
+};
+
+export const STRUCT_DIFF_TOOL = {
+  type: 'function',
+  function: {
+    name: 'struct_diff',
+    description: 'AST-based structural diff using difftastic. Shows logic changes only — ignores whitespace, formatting. Way clearer than git diff for code review.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path1: { type: 'string', description: 'First file or commit ref' },
+        path2: { type: 'string', description: 'Second file or commit ref' },
+        language: { type: 'string', description: 'Optional language hint' },
+      },
+      required: ['path1', 'path2'],
+    },
+  },
+};
+
+export const SHELL_LINT_TOOL = {
+  type: 'function',
+  function: {
+    name: 'shell_lint',
+    description: 'Validate a bash command with shellcheck before execution. Catches unquoted variables, dangerous patterns, POSIX issues. Use BEFORE sandbox_exec.',
+    parameters: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'Bash command to validate' },
+      },
+      required: ['command'],
+    },
+  },
+};
+
+// ═══════════════════════════════════════════
 // Tool Execution
 // ═══════════════════════════════════════════
 
@@ -552,8 +621,81 @@ export const ALL_TOOLS = [
   TRIVY_SCAN_TOOL, SANDBOX_EXEC_TOOL, PORT_SCAN_TOOL,
   CODE_EDIT_TOOL, CODE_WRITE_TOOL, SELF_HEAL_TOOL,
   FAST_FIND_TOOL, LSP_SYMBOLS_TOOL, LSP_DEFINITIONS_TOOL, LSP_DIAGNOSTICS_TOOL,
+  AST_SEARCH_TOOL, SYMBOL_MAP_TOOL, STRUCT_DIFF_TOOL, SHELL_LINT_TOOL,
   OPENAPI_SEARCH_TOOL,
 ];
+
+// ═══════════════════════════════════════════
+// Code Mode — 2 generic tools instead of 30
+// Inspired by Cloudflare's Code Mode MCP
+// Reduces tool def tokens from ~5,600 to ~600
+// ═══════════════════════════════════════════
+
+export const TOOL_SEARCH_TOOL = {
+  type: 'function',
+  function: {
+    name: 'tool_search',
+    description: 'Search the catalog of available tools by keyword. Returns tool names and brief descriptions. Use this FIRST to discover what tools exist before calling tool_run.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Keywords to search for (e.g. "git", "security", "search files")' },
+      },
+      required: ['query'],
+    },
+  },
+};
+
+export const TOOL_RUN_TOOL = {
+  type: 'function',
+  function: {
+    name: 'tool_run',
+    description: 'Execute any tool by name with arguments. Get tool names from tool_search. Available tool categories: file ops (read_file, list_files, fast_find), search (grep_search, find_references, lsp_symbols, lsp_definitions), git (git_log, git_diff, git_summary, git_authors, git_timeline), analysis (code_stats, dependency_graph, repo_summary, knowledge_graph), security (security_scan, deep_security_scan, dependency_audit, secrets_scan, trivy_scan, port_scan), edit (code_edit, code_write, sandbox_exec, self_heal), api (openapi_search). Use clone_repo to clone GitHub repos.',
+    parameters: {
+      type: 'object',
+      properties: {
+        tool: { type: 'string', description: 'Tool name (e.g. read_file, grep_search, deep_security_scan)' },
+        args: { type: 'object', description: 'Arguments object for the tool. Common args: path, pattern, query, file, max_results' },
+      },
+      required: ['tool', 'args'],
+    },
+  },
+};
+
+// Code Mode catalog — used by tool_search
+export function buildToolCatalog() {
+  return ALL_TOOLS.map(t => ({
+    name: t.function.name,
+    description: t.function.description,
+    required: t.function.parameters.required || [],
+    optional: Object.keys(t.function.parameters.properties || {}).filter(k => !(t.function.parameters.required || []).includes(k)),
+  }));
+}
+
+export function searchToolCatalog(query) {
+  const q = query.toLowerCase();
+  const catalog = buildToolCatalog();
+  const matches = catalog.filter(t =>
+    t.name.toLowerCase().includes(q) ||
+    t.description.toLowerCase().includes(q)
+  );
+  if (matches.length === 0) {
+    // No match — return all tool names so the LLM can see options
+    return {
+      query, count: 0,
+      message: 'No matches. All available tools:',
+      all_tools: catalog.map(t => t.name),
+    };
+  }
+  return {
+    query, count: matches.length,
+    matches: matches.map(t => ({
+      name: t.name,
+      desc: t.description.slice(0, 150),
+      args: { required: t.required, optional: t.optional },
+    })),
+  };
+}
 
 export function executeTool(name, args) {
   switch (name) {
@@ -586,7 +728,19 @@ export function executeTool(name, args) {
     case 'lsp_symbols': return execLspSymbols(args);
     case 'lsp_definitions': return execLspDefinitions(args);
     case 'lsp_diagnostics': return execLspDiagnostics(args);
+    case 'ast_search': return execAstSearch(args);
+    case 'symbol_map': return execSymbolMap(args);
+    case 'struct_diff': return execStructDiff(args);
+    case 'shell_lint': return execShellLint(args);
     case 'openapi_search': return execOpenAPISearch(args);
+    case 'tool_search': return JSON.stringify(searchToolCatalog(args.query || ''), null, 2);
+    case 'tool_run': {
+      // Recursive call to executeTool with the inner tool name
+      if (!args.tool) return 'Error: tool name required';
+      const inner = executeTool(args.tool, args.args || {});
+      if (inner !== null) return inner;
+      return `Error: unknown tool "${args.tool}". Use tool_search to find available tools.`;
+    }
     default: return null; // not handled here
   }
 }
@@ -2604,6 +2758,126 @@ function detectProjectLang(dirPath) {
   if (existsSync(resolve(dirPath, 'Cargo.toml'))) return 'rs';
   if (existsSync(resolve(dirPath, 'requirements.txt')) || existsSync(resolve(dirPath, 'pyproject.toml'))) return 'py';
   return 'js';
+}
+
+// ═══════════════════════════════════════════
+// AST Tools — ast-grep, ctags, difftastic, shellcheck
+// ═══════════════════════════════════════════
+
+function execAstSearch({ path: targetPath, pattern, language }) {
+  if (!existsSync(targetPath)) return `Not found: ${targetPath}`;
+  const t0 = performance.now();
+  let hasSg = false;
+  try { exec('sg --version', { timeout: 3000 }); hasSg = true; } catch {}
+  if (!hasSg) return `ast-grep not installed. Install: brew install ast-grep`;
+
+  let cmd = `sg run -p '${pattern.replace(/'/g, "'\\''")}'`;
+  if (language) cmd += ` -l ${language}`;
+  cmd += ` "${targetPath}" 2>/dev/null | head -200`;
+
+  try {
+    const result = exec(cmd, { timeout: 30000 });
+    const elapsed = Math.round(performance.now() - t0);
+    let out = `AST Search: ${pattern}\n${'='.repeat(50)}\n`;
+    out += `Path: ${targetPath} | Lang: ${language || 'auto'} | ${elapsed}ms\n\n`;
+    out += result.trim() || 'No matches.';
+    return out;
+  } catch (e) { return `Error: ${e.message}`; }
+}
+
+function execSymbolMap({ path: repoPath, kind }) {
+  if (!existsSync(repoPath)) return `Not found: ${repoPath}`;
+  const t0 = performance.now();
+  let hasCtags = false;
+  try { exec('ctags --version', { timeout: 3000 }); hasCtags = true; } catch {}
+  if (!hasCtags) return `universal-ctags not installed. Install: brew install universal-ctags`;
+
+  try {
+    const excludes = "--exclude=node_modules --exclude=.git --exclude=dist --exclude=build --exclude=vendor";
+    const cmd = `cd "${repoPath}" && ctags -R --output-format=json ${excludes} -f - . 2>/dev/null | head -2000`;
+    const result = exec(cmd, { timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+
+    const symbols = result.trim().split('\n').filter(l => l.trim()).map(l => {
+      try { return JSON.parse(l); } catch { return null; }
+    }).filter(Boolean);
+
+    const filtered = kind ? symbols.filter(s => s.kind === kind) : symbols;
+    const byKind = {};
+    filtered.forEach(s => {
+      if (!byKind[s.kind]) byKind[s.kind] = [];
+      byKind[s.kind].push(s);
+    });
+
+    const elapsed = Math.round(performance.now() - t0);
+    let out = `Symbol Map: ${repoPath}\n${'='.repeat(50)}\n`;
+    out += `Total: ${filtered.length} symbols | ${elapsed}ms\n\n`;
+
+    Object.entries(byKind).sort((a, b) => b[1].length - a[1].length).forEach(([k, items]) => {
+      out += `## ${k} (${items.length})\n`;
+      items.slice(0, 30).forEach(s => {
+        out += `  ${s.path}:${s.line}  ${s.name}${s.scope ? ' ['+s.scope+']' : ''}\n`;
+      });
+      if (items.length > 30) out += `  ... +${items.length - 30} more\n`;
+      out += '\n';
+    });
+    return out;
+  } catch (e) { return `Error: ${e.message}`; }
+}
+
+function execStructDiff({ path1, path2, language }) {
+  const t0 = performance.now();
+  let hasDifft = false;
+  try { exec('difft --version', { timeout: 3000 }); hasDifft = true; } catch {}
+  if (!hasDifft) return `difftastic not installed. Install: brew install difftastic`;
+
+  try {
+    let cmd = `difft --color=never "${path1}" "${path2}" 2>&1 | head -200`;
+    const result = exec(cmd, { timeout: 15000 });
+    const elapsed = Math.round(performance.now() - t0);
+    return `Structural Diff (difftastic) | ${elapsed}ms\n${'='.repeat(50)}\n\n${result || 'No differences'}`;
+  } catch (e) { return `Error: ${e.message}`; }
+}
+
+function execShellLint({ command }) {
+  if (!command) return 'command is required';
+  const t0 = performance.now();
+  let hasShellcheck = false;
+  try { exec('shellcheck --version', { timeout: 3000 }); hasShellcheck = true; } catch {}
+  if (!hasShellcheck) return `shellcheck not installed. Install: brew install shellcheck`;
+
+  try {
+    const tmpFile = `/tmp/milli-shellcheck-${Date.now()}.sh`;
+    writeFileSync(tmpFile, '#!/bin/bash\n' + command);
+    let result = '';
+    try { result = exec(`shellcheck -f json "${tmpFile}" 2>&1`, { timeout: 5000 }); }
+    catch (e) { result = e.stdout || e.message; }
+    try { execSync(`rm -f "${tmpFile}"`); } catch {}
+
+    const elapsed = Math.round(performance.now() - t0);
+    let issues = [];
+    try { issues = JSON.parse(result); } catch {}
+
+    let out = `Shell Lint: ${command.slice(0, 80)}\n${'='.repeat(50)}\n`;
+    out += `Issues: ${issues.length} | ${elapsed}ms\n\n`;
+
+    if (issues.length === 0) {
+      out += '✓ Clean — safe to execute\n';
+    } else {
+      const bySeverity = { error: [], warning: [], info: [], style: [] };
+      issues.forEach(i => { (bySeverity[i.level] || bySeverity.info).push(i); });
+      ['error', 'warning', 'info', 'style'].forEach(sev => {
+        if (bySeverity[sev].length === 0) return;
+        out += `[${sev.toUpperCase()}] ${bySeverity[sev].length}:\n`;
+        bySeverity[sev].slice(0, 10).forEach(i => {
+          out += `  L${i.line}:${i.column} SC${i.code}: ${i.message}\n`;
+        });
+        out += '\n';
+      });
+      const errors = bySeverity.error.length;
+      out += errors > 0 ? `⚠ ${errors} errors — DO NOT execute\n` : '✓ Warnings only — safe\n';
+    }
+    return out;
+  } catch (e) { return `Error: ${e.message}`; }
 }
 
 // ═══════════════════════════════════════════

@@ -5,8 +5,12 @@ import { createInterface } from 'readline';
 import { resolve } from 'path';
 import { homedir } from 'os';
 import { existsSync, mkdirSync } from 'fs';
-import { ALL_TOOLS, executeTool } from './tools.js';
+import { ALL_TOOLS, executeTool, TOOL_SEARCH_TOOL, TOOL_RUN_TOOL } from './tools.js';
 import { ReceiptLedger, verify, quorumDiff } from './verifier.js';
+
+// Code Mode: only 3 tools sent to LLM (tool_search, tool_run, clone_repo, grep_search)
+// instead of all 30. Saves ~5,000 prompt tokens per request.
+// LLM uses tool_search to discover, tool_run to execute.
 
 const app = express();
 app.use(cors());
@@ -271,7 +275,7 @@ async function chatWithRetry(messages, model, maxRetries = 3) {
       const resp = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ model: bodyModel, messages: cachedMessages, tools: [GREP_TOOL, CLONE_TOOL, ...ALL_TOOLS], tool_choice: 'auto' }),
+        body: JSON.stringify({ model: bodyModel, messages: cachedMessages, tools: [GREP_TOOL, CLONE_TOOL, TOOL_SEARCH_TOOL, TOOL_RUN_TOOL], tool_choice: 'auto' }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -325,69 +329,21 @@ app.post('/api/chat/stream', async (req, res) => {
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
   let conversationHistory = [
-    { role: 'system', content: `You are Milli-Agent, an expert code intelligence agent. You have these tools:
+    { role: 'system', content: `You are Milli-Agent, a code intelligence agent with 30 tools available via Code Mode.
 
-SEARCH & NAVIGATE:
-- clone_repo — clone a GitHub repo by URL or owner/repo
-- grep_search — regex search files via ripgrep (millisecond speed)
-- read_file — read file contents with line range
-- list_files — list directory contents, optionally recursive
-- find_references — find all usages of a symbol
+You have 4 tools:
+- clone_repo(repo) — clone a GitHub repo
+- grep_search(pattern, path, ...) — fast regex search via MCP server
+- tool_search(query) — find tools by keyword (e.g. "git", "security", "lsp")
+- tool_run(tool, args) — execute any tool by name with args
 
-GIT:
-- git_log — commit history
-- git_diff — diff between commits/branches
-- git_summary — rich repo overview: authors, commits, active days, branches, tags
-- git_effort — find hotspot files with most commits and churn
-- git_authors — detailed author stats: lines added/removed, file ownership
-- git_timeline — track a file's full lifetime: creation, renames, major changes
-- git_secrets_clean — scan git history for leaked secrets (API keys, tokens, passwords)
+Workflow:
+1. Use tool_search to discover what's available (e.g. tool_search("dependency CVE"))
+2. Use tool_run to execute (e.g. tool_run({tool: "dependency_audit", args: {path: "/repo"}}))
+3. ALWAYS cite file paths and line numbers in format \`file.ext:42\` — outputs are verified
+4. NEVER fabricate paths or code. Tool results have [receipt:XXXX] prefixes — your claims must match the actual data.
 
-ANALYSIS:
-- code_stats — lines of code, languages, file counts
-- dependency_graph — parse package.json/go.mod/Cargo.toml/requirements.txt
-- security_scan — quick regex-based security check
-- compare_repos — structural diff between two repos
-
-SECURITY (White-Hat):
-- deep_security_scan — OWASP Top 10 scan (AST-based with semgrep, or enhanced regex fallback). Finds injection, XSS, auth bypass, crypto failures, SSRF
-- dependency_audit — scan deps for known CVEs (npm audit, pip-audit, cargo audit, govulncheck)
-- secrets_scan — find leaked API keys, tokens, passwords in code + git history (gitleaks or entropy analysis)
-- trivy_scan — container/IaC security: Dockerfile misconfigs, K8s YAML issues, Terraform problems, dependency CVEs
-- port_scan — find exposed ports, network bindings, CORS wildcards, disabled TLS, privileged containers
-- sandbox_exec — run commands in sandboxed environment (tests, linting, builds) on cloned repos
-
-SELF-HEAL:
-- code_edit — edit a file by replacing exact string with new content. Creates backup. Path must be inside cloned repo.
-- code_write — create or overwrite a file. Creates backup if file exists.
-- self_heal — auto-detect issues (lint, test failures, security), report what's broken, suggest fix chain
-
-DEEP UNDERSTANDING:
-- repo_summary — comprehensive repo overview (README + structure + deps + stats)
-- knowledge_graph — build module map: imports, exports, definitions, relationships
-
-FILE FINDING & LSP:
-- fast_find — ultra-fast file finder (fd). Search by name, extension, size, modification time. 10-100x faster than find.
-- lsp_symbols — extract all functions/classes/methods/types from files. Language-aware parsing for JS/TS/Python/Go/Rust/C/Java/Ruby.
-- lsp_definitions — find where a symbol is defined. Follows imports across files.
-- lsp_diagnostics — run compiler/linter checks. Syntax errors, type errors, unused vars, missing imports.
-
-API INTELLIGENCE:
-- openapi_search — search OpenAPI/Swagger specs at milli-speed. Modes: endpoints, schemas, search, detail. Way faster & more token-efficient than grepping raw YAML.
-
-STRATEGY:
-1. For new repos: clone_repo → repo_summary or knowledge_graph for overview
-2. For specific questions: grep_search → read_file to examine matches
-3. For architecture: knowledge_graph depth=3 for deep analysis
-4. For security: security_scan then read_file on flagged files
-5. Be specific: name files, line numbers. Use targeted regex patterns.
-6. Chain tools: search → read → analyze. Don't stop at search results.
-6a. CITATION REQUIREMENT: When stating facts about code, ALWAYS cite the file path and line number in the format \`path/file.ext:42\`. Quote actual code in backticks. Tool results are prefixed with [receipt:XXXX] — your output will be verified against the actual files.
-6b. NEVER fabricate file paths, line numbers, or code that doesn't appear in tool results. If you don't know, run more tools. Hallucinated citations are auto-flagged as fabricated.
-7. For security reviews: deep_security_scan → dependency_audit → secrets_scan → read_file on flagged files
-8. Compare models: use different models on the same security scan to find what each catches
-9. For self-healing: self_heal → identify issues → code_edit to fix → sandbox_exec to test → repeat until green
-10. Always backup before editing: code_edit creates .milli-backup files automatically` }
+Be terse. Run tools, cite results.` }
   ];
   try { if (history) { const h = Array.isArray(history) ? history : JSON.parse(history); conversationHistory.push(...h); } } catch {}
   conversationHistory.push({ role: 'user', content: message });
@@ -516,7 +472,7 @@ STRATEGY:
           const trustReport = await verify(content, ledger, {
             useJudge,
             apiKey: process.env.OPENROUTER_API_KEY,
-            model: 'anthropic/claude-opus-4-6',
+            model: 'openai/gpt-oss-safeguard-20b',
           });
           send('verification', trustReport);
         } catch (e) {
