@@ -125,6 +125,115 @@ code,.mono { font-family:'JetBrains Mono',monospace; }
 .cmdk-item:hover,.cmdk-item.active { background:var(--bg3); color:var(--fg); }
 .cmdk-item .shortcut { margin-left:auto; font-size:10px; font-family:monospace; color:var(--fg3); padding:2px 6px; border-radius:4px; background:var(--bg); }
 
+/* ═══ Warp Speed / Interstellar Loading Animation ═══ */
+.warp-container {
+  position:relative; width:100%; height:300px; overflow:hidden;
+  background:radial-gradient(ellipse at center, #0a0015 0%, #000 70%);
+  border-radius:var(--radius); margin-bottom:16px;
+  display:flex; align-items:center; justify-content:center;
+}
+
+/* Star field — 3 layers at different speeds */
+.warp-stars {
+  position:absolute; inset:0; overflow:hidden;
+}
+.warp-stars div {
+  position:absolute; width:2px; height:2px; background:#fff; border-radius:50%;
+}
+.warp-star-layer {
+  position:absolute; inset:0;
+  animation: warpZoom 1.5s linear infinite;
+}
+.warp-star-layer:nth-child(2) { animation-delay:-0.5s; animation-duration:1.2s; }
+.warp-star-layer:nth-child(3) { animation-delay:-1s; animation-duration:0.9s; }
+
+@keyframes warpZoom {
+  0% { transform:scale(0.1) rotate(0deg); opacity:0; }
+  20% { opacity:1; }
+  100% { transform:scale(3) rotate(10deg); opacity:0; }
+}
+
+/* Tunnel rings — concentric circles rushing toward viewer */
+.warp-tunnel {
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+}
+.warp-ring {
+  position:absolute; border:1px solid rgba(139,92,246,.15); border-radius:50%;
+  animation: warpRing 2s linear infinite;
+}
+.warp-ring:nth-child(1) { animation-delay:0s; }
+.warp-ring:nth-child(2) { animation-delay:-0.3s; }
+.warp-ring:nth-child(3) { animation-delay:-0.6s; }
+.warp-ring:nth-child(4) { animation-delay:-0.9s; }
+.warp-ring:nth-child(5) { animation-delay:-1.2s; }
+.warp-ring:nth-child(6) { animation-delay:-1.5s; }
+.warp-ring:nth-child(7) { animation-delay:-1.8s; }
+
+@keyframes warpRing {
+  0% { width:4px; height:4px; opacity:0; border-color:rgba(139,92,246,.6); border-width:2px; }
+  30% { opacity:1; }
+  100% { width:800px; height:800px; opacity:0; border-color:rgba(139,92,246,.02); border-width:1px; }
+}
+
+/* Tesseract grid lines */
+.warp-grid {
+  position:absolute; inset:0; overflow:hidden; opacity:0.15;
+}
+.warp-grid-line {
+  position:absolute; background:linear-gradient(to bottom, transparent, var(--purple), transparent);
+  animation: warpGridLine 3s linear infinite;
+}
+.warp-grid-line.h { width:100%; height:1px; left:0; }
+.warp-grid-line.v { width:1px; height:100%; top:0; }
+
+@keyframes warpGridLine {
+  0% { opacity:0; transform:scaleX(0); }
+  50% { opacity:1; transform:scaleX(1); }
+  100% { opacity:0; transform:scaleX(0); }
+}
+
+/* Central light burst */
+.warp-core {
+  position:relative; z-index:2; text-align:center;
+}
+.warp-glow {
+  width:80px; height:80px; border-radius:50%; margin:0 auto 16px;
+  background:radial-gradient(circle, rgba(139,92,246,.8) 0%, rgba(139,92,246,.2) 40%, transparent 70%);
+  animation: warpPulse 1.5s ease-in-out infinite;
+  box-shadow:0 0 60px rgba(139,92,246,.4), 0 0 120px rgba(139,92,246,.2);
+}
+@keyframes warpPulse {
+  0%,100% { transform:scale(0.8); opacity:0.6; }
+  50% { transform:scale(1.2); opacity:1; }
+}
+
+.warp-text {
+  font-size:14px; font-weight:600; color:var(--fg); letter-spacing:2px; text-transform:uppercase;
+  text-shadow:0 0 20px rgba(139,92,246,.5);
+  animation:fadeIn .5s ease-out;
+}
+.warp-sub {
+  font-size:11px; color:var(--fg3); margin-top:6px; font-family:monospace;
+  animation:fadeIn .5s ease-out .3s both;
+}
+
+/* Speed lines radiating from center */
+.warp-lines {
+  position:absolute; inset:0; overflow:hidden;
+}
+.warp-line {
+  position:absolute; top:50%; left:50%;
+  width:2px; height:0;
+  background:linear-gradient(to bottom, transparent, rgba(255,255,255,.6), transparent);
+  transform-origin:top center;
+  animation: warpLine 0.8s linear infinite;
+}
+@keyframes warpLine {
+  0% { height:0; opacity:0; }
+  30% { opacity:1; }
+  100% { height:300px; opacity:0; }
+}
+
 /* Responsive: collapse sidebar on small screens */
 @media (max-width: 768px) {
   .sidebar { width:56px; }
@@ -1522,6 +1631,86 @@ async function runAPIRace() {
   if (el) renderAPIRaceResults(el);
 }
 
+// ═══ Warp Speed Animation Builder ═══
+function buildWarpAnimation(statusText = 'Scanning', subText = '') {
+  const container = h('div',{className:'warp-container'});
+
+  // Star field — 3 layers with random stars
+  const stars = h('div',{className:'warp-stars'});
+  for (let layer = 0; layer < 3; layer++) {
+    const sl = h('div',{className:'warp-star-layer'});
+    for (let i = 0; i < 40; i++) {
+      const star = h('div',{style:{
+        left: (Math.random()*100)+'%',
+        top: (Math.random()*100)+'%',
+        width: (1+Math.random()*2)+'px',
+        height: (1+Math.random()*2)+'px',
+        opacity: 0.3+Math.random()*0.7,
+      }});
+      sl.appendChild(star);
+    }
+    stars.appendChild(sl);
+  }
+  container.appendChild(stars);
+
+  // Speed lines radiating from center
+  const lines = h('div',{className:'warp-lines'});
+  for (let i = 0; i < 24; i++) {
+    const angle = (i / 24) * 360;
+    const line = h('div',{className:'warp-line',style:{
+      transform: `rotate(${angle}deg)`,
+      animationDelay: `${-Math.random()*0.8}s`,
+      animationDuration: `${0.5+Math.random()*0.6}s`,
+    }});
+    lines.appendChild(line);
+  }
+  container.appendChild(lines);
+
+  // Tunnel rings
+  const tunnel = h('div',{className:'warp-tunnel'});
+  for (let i = 0; i < 7; i++) {
+    tunnel.appendChild(h('div',{className:'warp-ring'}));
+  }
+  container.appendChild(tunnel);
+
+  // Grid lines (tesseract effect)
+  const grid = h('div',{className:'warp-grid'});
+  for (let i = 0; i < 8; i++) {
+    const hLine = h('div',{className:'warp-grid-line h',style:{
+      top: (10 + i*11)+'%',
+      animationDelay: `${-i*0.4}s`,
+    }});
+    const vLine = h('div',{className:'warp-grid-line v',style:{
+      left: (10 + i*11)+'%',
+      animationDelay: `${-i*0.3}s`,
+      animationName:'warpGridLine',
+    }});
+    // Override h lines to use scaleX, v lines to use scaleY
+    vLine.style.background = 'linear-gradient(to right, transparent, var(--purple), transparent)';
+    vLine.style.animation = 'warpGridLine 3s linear infinite';
+    vLine.style.animationDelay = `${-i*0.3}s`;
+    grid.appendChild(hLine);
+    grid.appendChild(vLine);
+  }
+  container.appendChild(grid);
+
+  // Central core + text
+  const core = h('div',{className:'warp-core'});
+  core.appendChild(h('div',{className:'warp-glow'}));
+  core.appendChild(h('div',{className:'warp-text',id:'warp-status'},statusText));
+  core.appendChild(h('div',{className:'warp-sub',id:'warp-sub'},subText));
+  container.appendChild(core);
+
+  return container;
+}
+
+function updateWarpStatus(text, sub) {
+  const el = document.getElementById('warp-status');
+  const subEl = document.getElementById('warp-sub');
+  if (el) el.textContent = text;
+  if (subEl) subEl.textContent = sub || '';
+}
+
 // ═══ WHITEHAT TAB — One-click security audit ═══
 let whState = { repo: 'https://github.com/walter-grace/milli-agent', scanning: false, steps: [], complete: null };
 
@@ -1633,6 +1822,13 @@ async function runWhiteHatAudit() {
   whState.complete = null;
   currentTab = null; render();
 
+  // Show warp animation
+  const el = document.getElementById('wh-results');
+  if (el) {
+    el.innerHTML = '';
+    el.appendChild(buildWarpAnimation('Initializing', 'Preparing security scan pipeline...'));
+  }
+
   // Parse repo
   let repo = whState.repo.trim();
   const ghMatch = repo.match(/github\.com\/([^\/\s]+\/[^\/\s]+)/);
@@ -1670,8 +1866,16 @@ async function runWhiteHatAudit() {
               } else {
                 whState.steps.push(d);
               }
-              const el = document.getElementById('wh-results');
-              if (el) renderWhiteHatResults(el);
+              // Update warp animation text while scanning
+              if (d.status === 'running') {
+                updateWarpStatus(d.label || 'Scanning', `Step ${whState.steps.length}/7`);
+              }
+              // Once first result comes in, switch from warp to results view
+              const doneSteps = whState.steps.filter(s => s.status === 'done' || s.status === 'error');
+              if (doneSteps.length >= 1) {
+                const el = document.getElementById('wh-results');
+                if (el) renderWhiteHatResults(el);
+              }
             }
             if (evt === 'complete') {
               whState.complete = d;
@@ -1768,6 +1972,13 @@ async function runHeal() {
   healState.healing = true;
   healState.steps = [];
   currentTab = null; render();
+
+  // Show warp animation
+  const healEl = document.getElementById('heal-results');
+  if (healEl) {
+    healEl.innerHTML = '';
+    healEl.appendChild(buildWarpAnimation('Healing', 'Diagnosing codebase...'));
+  }
 
   let repo = healState.repo.trim();
   const ghMatch = repo.match(/github\.com\/([^\/\s]+\/[^\/\s]+)/);
