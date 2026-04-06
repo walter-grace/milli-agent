@@ -126,6 +126,7 @@ function render() {
     app.appendChild(buildNav());
     if (state.tab==='search') app.appendChild(renderSearch());
     else if (state.tab==='chat') app.appendChild(renderChat());
+    else if (state.tab==='api') app.appendChild(renderAPI());
     else app.appendChild(renderCompare());
     currentTab = state.tab;
   } else {
@@ -143,6 +144,7 @@ function buildNav() {
       h('button',{className:'tab'+(state.tab==='search'?' tab-active':''),onClick:()=>{state.tab='search';render();}},'Search'),
       h('button',{className:'tab'+(state.tab==='chat'?' tab-active':''),onClick:()=>{state.tab='chat';render();}},'Chat'),
       h('button',{className:'tab'+(state.tab==='compare'?' tab-active':''),onClick:()=>{state.tab='compare';render();}},'Compare'),
+      h('button',{className:'tab'+(state.tab==='api'?' tab-active':''),onClick:()=>{state.tab='api';render();}},'API'),
     ),
     h('div',{style:{flex:1}}),
     state.sessionCost > 0 ? h('span',{style:{fontSize:'11px',color:'var(--green)',fontWeight:600,marginRight:'12px',fontFamily:'monospace'}},
@@ -1030,6 +1032,234 @@ async function sendCompare() {
     }
   }));
   cmpState.sending=false; updateCompareResults();
+}
+
+// ═══ API TAB — OpenAPI spec upload, search, and race ═══
+let apiState = { specContent: null, specName: '', specPath: '', query: '', mode: 'endpoints', results: null, raceResults: null, racing: false, searching: false, uploaded: false };
+
+function renderAPI() {
+  const main = h('div',{style:{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden'}});
+
+  // Header
+  const top = h('div',{style:{padding:'20px 24px',flexShrink:0,borderBottom:'1px solid var(--border)'}});
+  top.appendChild(h('h2',{style:{fontSize:'16px',fontWeight:700,marginBottom:'2px'}},'API Intelligence'));
+  top.appendChild(h('p',{style:{fontSize:'12px',color:'var(--fg3)',marginBottom:'14px'}},'Upload an OpenAPI/Swagger spec. Search endpoints, schemas — race all servers.'));
+
+  // Upload row
+  const uploadRow = h('div',{style:{display:'flex',gap:'8px',marginBottom:'12px',alignItems:'center'}});
+
+  // File input
+  const fileLabel = h('label',{style:{padding:'8px 16px',borderRadius:'10px',border:'1px dashed var(--border)',background:'var(--bg2)',color:'var(--fg2)',fontSize:'13px',cursor:'pointer',display:'flex',alignItems:'center',gap:'6px'}});
+  fileLabel.textContent = apiState.uploaded ? apiState.specName : 'Upload YAML/JSON spec...';
+  if (apiState.uploaded) fileLabel.style.borderColor = 'var(--green)';
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = '.json,.yaml,.yml';
+  fileInput.style.display = 'none';
+  fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    apiState.specName = file.name;
+    apiState.specContent = await file.text();
+    fileLabel.textContent = file.name + ' (' + (apiState.specContent.length / 1024).toFixed(0) + 'KB)';
+    fileLabel.style.borderColor = 'var(--green)';
+    // Upload to server
+    const resp = await fetch('/api/openapi/upload', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ content: apiState.specContent, filename: file.name })
+    });
+    const d = await resp.json();
+    if (d.path) { apiState.specPath = d.path; apiState.uploaded = true; }
+  });
+  fileLabel.appendChild(fileInput);
+  uploadRow.appendChild(fileLabel);
+
+  // Or paste GitHub URL
+  uploadRow.appendChild(h('span',{style:{color:'var(--fg3)',fontSize:'12px'}},'or'));
+  const urlInput = document.createElement('input');
+  urlInput.className = 'sinput';
+  urlInput.placeholder = 'GitHub URL with OpenAPI spec...';
+  urlInput.style.cssText = 'flex:1;font-size:12px;';
+  urlInput.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter') return;
+    const url = urlInput.value.trim();
+    if (!url) return;
+    const parsed = url.match(/github\.com\/([^\/\s]+\/[^\/\s]+)/);
+    if (parsed) {
+      fileLabel.textContent = 'Cloning ' + parsed[1] + '...';
+      const resp = await fetch('/api/clone', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ repo: parsed[1] }) });
+      const d = await resp.json();
+      if (d.path) { apiState.specPath = d.path; apiState.specName = parsed[1]; apiState.uploaded = true; fileLabel.textContent = parsed[1]; fileLabel.style.borderColor = 'var(--green)'; }
+    }
+  });
+  uploadRow.appendChild(urlInput);
+  top.appendChild(uploadRow);
+
+  // Search controls
+  const searchRow = h('div',{style:{display:'flex',gap:'8px',marginBottom:'12px'}});
+  const queryInput = document.createElement('input');
+  queryInput.className = 'sinput';
+  queryInput.placeholder = 'Search query (endpoint, schema, keyword)...';
+  queryInput.value = apiState.query;
+  queryInput.style.flex = '1';
+  queryInput.addEventListener('input', e => apiState.query = e.target.value);
+  queryInput.addEventListener('keydown', e => { if (e.key === 'Enter') runAPISearch(); });
+
+  const modeSelect = document.createElement('select');
+  modeSelect.className = 'sel';
+  modeSelect.style.width = '120px';
+  ['endpoints','schemas','search','detail'].forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m; opt.textContent = m.charAt(0).toUpperCase() + m.slice(1);
+    if (m === apiState.mode) opt.selected = true;
+    modeSelect.appendChild(opt);
+  });
+  modeSelect.addEventListener('change', e => apiState.mode = e.target.value);
+
+  const searchBtn = h('button',{className:'sbtn',onClick:runAPISearch}, apiState.searching ? 'Searching...' : 'Search');
+  const raceBtn = h('button',{className:'sbtn',style:{background:'var(--purple)',color:'#fff'},onClick:runAPIRace}, apiState.racing ? 'Racing...' : 'Race All');
+  searchRow.append(queryInput, modeSelect, searchBtn, raceBtn);
+  top.appendChild(searchRow);
+
+  // Preset specs
+  const presets = h('div',{style:{display:'flex',flexWrap:'wrap',gap:'6px'}});
+  [
+    ['Cloudflare API','cloudflare/api-schemas'],
+    ['GitHub API','github/rest-api-description'],
+    ['Stripe API','stripe/openapi'],
+  ].forEach(([label, repo]) => {
+    presets.appendChild(h('button',{className:'pre',onClick:async ()=>{
+      fileLabel.textContent = 'Cloning ' + repo + '...';
+      const resp = await fetch('/api/clone', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({repo}) });
+      const d = await resp.json();
+      if (d.path) { apiState.specPath = d.path; apiState.specName = repo; apiState.uploaded = true; fileLabel.textContent = repo; fileLabel.style.borderColor = 'var(--green)'; }
+    }},label));
+  });
+  top.appendChild(presets);
+  main.appendChild(top);
+
+  // Results
+  const resultsArea = h('div',{id:'api-results',style:{flex:1,overflowY:'auto',padding:'0'}});
+
+  if (apiState.raceResults) {
+    renderAPIRaceResults(resultsArea);
+  } else if (apiState.results) {
+    renderAPIResults(resultsArea);
+  } else {
+    resultsArea.appendChild(h('div',{style:{textAlign:'center',color:'var(--fg3)',paddingTop:'80px',fontSize:'14px'}},'Upload a spec or select a preset — then search or race'));
+  }
+
+  main.appendChild(resultsArea);
+  return main;
+}
+
+function renderAPIResults(container) {
+  const r = apiState.results;
+  container.innerHTML = '';
+
+  // Stats bar
+  const statsBar = h('div',{style:{display:'flex',alignItems:'center',gap:'12px',padding:'10px 24px',borderBottom:'1px solid var(--border)',fontSize:'12px',background:'var(--bg2)'}});
+  statsBar.appendChild(h('span',{style:{color:'var(--green)',fontWeight:700,fontFamily:'monospace',fontSize:'14px'}},fmt(r.elapsed)));
+  statsBar.appendChild(h('span',{style:{color:'var(--fg2)'}},r.bytes + ' bytes'));
+  statsBar.appendChild(h('span',{style:{color:'var(--fg3)'}},'~' + Math.ceil(r.bytes/4) + ' tokens'));
+  statsBar.appendChild(h('span',{style:{color:IMPLS[r.impl]?.color||'var(--fg3)',fontWeight:600}},(IMPLS[r.impl]?.icon||'') + ' ' + (r.impl||'node')));
+  container.appendChild(statsBar);
+
+  // Text results — render as pre-formatted
+  const code = h('pre',{style:{padding:'16px 24px',fontSize:'12px',fontFamily:'JetBrains Mono,monospace',lineHeight:'1.6',color:'var(--fg2)',whiteSpace:'pre-wrap',margin:0}});
+  code.textContent = r.text || 'No results';
+  container.appendChild(code);
+}
+
+function renderAPIRaceResults(container) {
+  container.innerHTML = '';
+  const results = apiState.raceResults;
+  const impls = Object.keys(results).sort((a,b) => (results[a].elapsed||9999) - (results[b].elapsed||9999));
+  const fastest = impls[0];
+
+  // Race results header
+  const header = h('div',{style:{padding:'12px 24px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}});
+  header.appendChild(h('div',{style:{fontSize:'14px',fontWeight:700,marginBottom:'8px'}},'Race Results'));
+
+  // Bar chart
+  const maxMs = Math.max(...Object.values(results).map(r => r.elapsed || 0));
+  impls.forEach(id => {
+    const r = results[id];
+    const impl = IMPLS[id] || { name: id, color: '#888', icon: '' };
+    const pct = maxMs > 0 ? Math.max(5, (r.elapsed / maxMs) * 100) : 100;
+    const lane = h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'6px'}});
+    lane.appendChild(h('span',{style:{width:'80px',fontSize:'12px',fontWeight:600,color:impl.color}},impl.icon + ' ' + impl.name));
+    const track = h('div',{style:{flex:1,height:'24px',background:'var(--bg)',borderRadius:'6px',overflow:'hidden'}});
+    const fill = h('div',{style:{height:'100%',width:pct+'%',background:id===fastest?'var(--green)':impl.color,borderRadius:'6px',animation:'barGrow 0.5s ease-out',display:'flex',alignItems:'center',justifyContent:'flex-end',paddingRight:'8px'}});
+    fill.appendChild(h('span',{style:{fontSize:'10px',fontWeight:700,color:'#fff',fontFamily:'monospace'}},fmt(r.elapsed)));
+    track.appendChild(fill);
+    lane.appendChild(track);
+    lane.appendChild(h('span',{style:{width:'60px',fontSize:'10px',color:'var(--fg3)',textAlign:'right'}},r.bytes + 'b'));
+    if (id === fastest) lane.appendChild(h('span',{style:{fontSize:'10px',fontWeight:700,color:'var(--green)'}},'WIN'));
+    header.appendChild(lane);
+  });
+  container.appendChild(header);
+
+  // Detailed results per impl
+  const grid = h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px',padding:'16px 24px'}});
+  impls.forEach(id => {
+    const r = results[id];
+    const impl = IMPLS[id] || { name: id, color: '#888', icon: '' };
+    const card = h('div',{style:{borderRadius:'12px',border:'1px solid '+(id===fastest?'var(--green)':'var(--border)'),overflow:'hidden',background:'var(--bg2)'}});
+    const hd = h('div',{style:{display:'flex',alignItems:'center',gap:'8px',padding:'8px 12px',borderBottom:'1px solid var(--bg3)',borderTop:'2px solid '+impl.color}});
+    hd.appendChild(h('span',{style:{fontSize:'12px',fontWeight:600,color:impl.color}},impl.icon + ' ' + (impl.name || id)));
+    hd.appendChild(h('span',{style:{fontSize:'11px',fontFamily:'monospace',color:id===fastest?'var(--green)':'var(--fg3)'}},fmt(r.elapsed)));
+    hd.appendChild(h('span',{style:{marginLeft:'auto',fontSize:'10px',color:'var(--fg3)'}},r.bytes+'b'));
+    if (id === fastest) hd.appendChild(h('span',{style:{fontSize:'10px',fontWeight:700,color:'var(--green)',marginLeft:'6px'}},'FASTEST'));
+    card.appendChild(hd);
+    const body = h('pre',{style:{padding:'8px 12px',maxHeight:'200px',overflowY:'auto',fontSize:'10px',fontFamily:'monospace',lineHeight:'1.5',color:'var(--fg2)',whiteSpace:'pre-wrap',margin:0}});
+    body.textContent = r.text || 'Error';
+    card.appendChild(body);
+    grid.appendChild(card);
+  });
+  container.appendChild(grid);
+}
+
+async function runAPISearch() {
+  if (!apiState.specPath || apiState.searching) return;
+  apiState.searching = true;
+  apiState.raceResults = null;
+  const area = document.getElementById('api-results');
+  if (area) area.innerHTML = '<div style="padding:40px;text-align:center"><div class="f1-loader fast" style="width:200px;margin:0 auto 16px"></div><div style="color:var(--green);font-size:13px;font-weight:600"><span class="f1-dots"><span></span><span></span><span></span><span></span></span> Searching spec</div></div>';
+
+  try {
+    const resp = await fetch('/api/openapi/search', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ path: apiState.specPath, query: apiState.query, mode: apiState.mode, impl: state.impl })
+    });
+    apiState.results = await resp.json();
+  } catch (e) {
+    apiState.results = { text: 'Error: ' + e.message, elapsed: 0, bytes: 0 };
+  }
+  apiState.searching = false;
+  const el = document.getElementById('api-results');
+  if (el) renderAPIResults(el);
+}
+
+async function runAPIRace() {
+  if (!apiState.specPath || apiState.racing) return;
+  apiState.racing = true;
+  apiState.results = null;
+  const area = document.getElementById('api-results');
+  if (area) area.innerHTML = '<div style="padding:40px;text-align:center"><div class="f1-loader" style="width:240px;margin:0 auto 16px"></div><div style="color:var(--green);font-size:13px;font-weight:600"><span class="f1-dots"><span></span><span></span><span></span><span></span></span> Racing all servers...</div></div>';
+
+  try {
+    const resp = await fetch('/api/openapi/race', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ path: apiState.specPath, query: apiState.query, mode: apiState.mode })
+    });
+    apiState.raceResults = await resp.json();
+  } catch (e) {
+    apiState.raceResults = { node: { text: 'Error: ' + e.message, elapsed: 0, bytes: 0 } };
+  }
+  apiState.racing = false;
+  const el = document.getElementById('api-results');
+  if (el) renderAPIRaceResults(el);
 }
 
 // Init

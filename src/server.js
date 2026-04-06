@@ -270,6 +270,11 @@ SEARCH & NAVIGATE:
 GIT:
 - git_log — commit history
 - git_diff — diff between commits/branches
+- git_summary — rich repo overview: authors, commits, active days, branches, tags
+- git_effort — find hotspot files with most commits and churn
+- git_authors — detailed author stats: lines added/removed, file ownership
+- git_timeline — track a file's full lifetime: creation, renames, major changes
+- git_secrets_clean — scan git history for leaked secrets (API keys, tokens, passwords)
 
 ANALYSIS:
 - code_stats — lines of code, languages, file counts
@@ -280,6 +285,9 @@ ANALYSIS:
 DEEP UNDERSTANDING:
 - repo_summary — comprehensive repo overview (README + structure + deps + stats)
 - knowledge_graph — build module map: imports, exports, definitions, relationships
+
+API INTELLIGENCE:
+- openapi_search — search OpenAPI/Swagger specs at milli-speed. Modes: endpoints, schemas, search, detail. Way faster & more token-efficient than grepping raw YAML.
 
 STRATEGY:
 1. For new repos: clone_repo → repo_summary or knowledge_graph for overview
@@ -566,6 +574,102 @@ app.post('/api/clone', (req, res) => {
 // List cloned repos
 app.get('/api/repos', (_, res) => {
   res.json(Object.entries(clonedRepos).map(([slug, path]) => ({ slug, path })));
+});
+
+// OpenAPI spec upload + search
+import { writeFileSync, unlinkSync } from 'fs';
+app.post('/api/openapi/upload', (req, res) => {
+  const { content, filename } = req.body;
+  if (!content) return res.status(400).json({ error: 'content required' });
+  const dir = resolve(homedir(), 'milli-repos', '_openapi_uploads');
+  mkdirSync(dir, { recursive: true });
+  const fname = (filename || 'spec.json').replace(/[^a-zA-Z0-9._-]/g, '_');
+  const fpath = resolve(dir, fname);
+  writeFileSync(fpath, content);
+  res.json({ success: true, path: dir, file: fpath });
+});
+
+app.post('/api/openapi/search', async (req, res) => {
+  const { path: specPath, query, mode, method, impl } = req.body;
+  if (!specPath) return res.status(400).json({ error: 'path required' });
+
+  // If impl specified and it's a native MCP server, use that
+  if (impl && impl !== 'node' && IMPL_CONFIGS[impl] && !IMPL_CONFIGS[impl].disabled) {
+    try {
+      const server = await getServer(impl);
+      const request = { pattern: '', path: specPath, tool: 'openapi_search' };
+      // Send as MCP tools/call
+      const mcpReq = {
+        jsonrpc: '2.0', id: Date.now(),
+        method: 'tools/call',
+        params: { name: 'openapi_search', arguments: { path: specPath, query: query || '', mode: mode || 'search', method: method || '' } }
+      };
+      const start = performance.now();
+      const line = JSON.stringify(mcpReq);
+      server.proc.stdin.write(line + '\n');
+      const result = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('timeout')), 15000);
+        const handler = (data) => {
+          try {
+            const resp = JSON.parse(data.toString().trim());
+            if (resp.id === mcpReq.id) {
+              clearTimeout(timeout);
+              server.rl.removeListener('line', handler);
+              resolve(resp);
+            }
+          } catch {}
+        };
+        server.rl.on('line', handler);
+      });
+      const elapsed = Math.round(performance.now() - start);
+      const text = result?.result?.content?.[0]?.text || 'No results';
+      return res.json({ text, elapsed, impl, bytes: text.length });
+    } catch (e) {
+      // Fall through to Node.js
+    }
+  }
+
+  // Default: use Node.js executeTool
+  const start = performance.now();
+  const text = executeTool('openapi_search', { path: specPath, query: query || '', mode: mode || 'search', method: method || '' });
+  const elapsed = Math.round(performance.now() - start);
+  res.json({ text, elapsed, impl: 'node', bytes: text?.length || 0 });
+});
+
+app.post('/api/openapi/race', async (req, res) => {
+  const { path: specPath, query, mode, method } = req.body;
+  if (!specPath) return res.status(400).json({ error: 'path required' });
+
+  const impls = ['cpp', 'python', 'swift', 'node'];
+  const results = {};
+
+  await Promise.all(impls.map(async (impl) => {
+    try {
+      const start = performance.now();
+      let text;
+      if (impl === 'node') {
+        text = executeTool('openapi_search', { path: specPath, query: query || '', mode: mode || 'search', method: method || '' });
+      } else if (IMPL_CONFIGS[impl] && !IMPL_CONFIGS[impl].disabled) {
+        const server = await getServer(impl);
+        const mcpReq = { jsonrpc: '2.0', id: Date.now() + Math.random(), method: 'tools/call', params: { name: 'openapi_search', arguments: { path: specPath, query: query || '', mode: mode || 'search', method: method || '' } } };
+        server.proc.stdin.write(JSON.stringify(mcpReq) + '\n');
+        const result = await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('timeout')), 15000);
+          const handler = (data) => { try { const r = JSON.parse(data.toString().trim()); if (Math.abs(r.id - mcpReq.id) < 1) { clearTimeout(timeout); server.rl.removeListener('line', handler); resolve(r); } } catch {} };
+          server.rl.on('line', handler);
+        });
+        text = result?.result?.content?.[0]?.text || 'No results';
+      } else {
+        return;
+      }
+      const elapsed = Math.round(performance.now() - start);
+      results[impl] = { text: text?.slice(0, 2000), elapsed, bytes: text?.length || 0 };
+    } catch (e) {
+      results[impl] = { text: 'Error: ' + e.message, elapsed: 0, bytes: 0, error: true };
+    }
+  }));
+
+  res.json(results);
 });
 
 app.get('/api/models', (_, res) => res.json(MODELS));
