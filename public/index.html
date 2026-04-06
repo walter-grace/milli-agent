@@ -1631,76 +1631,258 @@ async function runAPIRace() {
   if (el) renderAPIRaceResults(el);
 }
 
-// ═══ Warp Speed Animation Builder ═══
+// ═══ WebGL Warp Speed Animation ═══
+let warpGL = null; // track active animation for cleanup
+
+const WARP_VERT = `
+attribute vec3 aPos;
+attribute float aSpeed;
+attribute float aSize;
+uniform float uTime;
+uniform float uAspect;
+varying float vAlpha;
+varying float vDist;
+void main() {
+  // Move star toward camera (z decreasing)
+  float z = mod(aPos.z - uTime * aSpeed * 2.0, 4.0) - 0.1;
+  float scale = 1.0 / max(z, 0.05);
+  vec2 pos = aPos.xy * scale;
+  pos.x /= uAspect;
+  // Fade based on depth
+  vDist = z;
+  vAlpha = smoothstep(4.0, 2.0, z) * smoothstep(-0.1, 0.3, z);
+  // Stretch stars into lines at high speed
+  float stretch = max(1.0, aSpeed * 0.5 / max(z, 0.1));
+  gl_PointSize = aSize * scale * 2.0 + stretch;
+  gl_Position = vec4(pos, 0.0, 1.0);
+}`;
+
+const WARP_FRAG = `
+precision mediump float;
+varying float vAlpha;
+varying float vDist;
+void main() {
+  // Circular point with soft edge
+  vec2 c = gl_PointCoord - 0.5;
+  float d = length(c);
+  float alpha = smoothstep(0.5, 0.1, d) * vAlpha;
+  // Color: white core fading to purple at edges
+  vec3 white = vec3(1.0);
+  vec3 purple = vec3(0.545, 0.361, 0.965);
+  vec3 color = mix(purple, white, smoothstep(0.3, 0.0, d));
+  // Depth fog — distant stars are more purple
+  color = mix(purple * 0.5, color, smoothstep(3.5, 1.0, vDist));
+  gl_FragColor = vec4(color, alpha * 0.9);
+}`;
+
+// Tunnel ring shader
+const RING_VERT = `
+attribute vec2 aPos;
+uniform float uTime;
+uniform float uRingId;
+uniform float uAspect;
+void main() {
+  float t = mod(uTime * 0.5 + uRingId * 0.14, 1.0);
+  float scale = t * 3.0 + 0.01;
+  vec2 pos = aPos * scale;
+  pos.x /= uAspect;
+  gl_Position = vec4(pos, 0.0, 1.0);
+}`;
+
+const RING_FRAG = `
+precision mediump float;
+uniform float uTime;
+uniform float uRingId;
+void main() {
+  float t = mod(uTime * 0.5 + uRingId * 0.14, 1.0);
+  float alpha = smoothstep(0.0, 0.15, t) * smoothstep(1.0, 0.7, t) * 0.3;
+  gl_FragColor = vec4(0.545, 0.361, 0.965, alpha);
+}`;
+
+function createShader(gl, type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.warn(gl.getShaderInfoLog(s)); return null; }
+  return s;
+}
+
+function createProgram(gl, vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, vs);
+  gl.attachShader(p, fs);
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.warn(gl.getProgramInfoLog(p)); return null; }
+  return p;
+}
+
 function buildWarpAnimation(statusText = 'Scanning', subText = '') {
   const container = h('div',{className:'warp-container'});
 
-  // Star field — 3 layers with random stars
+  // Try WebGL first
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl', { alpha: true, antialias: true });
+
+  if (!gl) {
+    // CSS fallback
+    return buildWarpCSS(container, statusText, subText);
+  }
+
+  canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;';
+  container.appendChild(canvas);
+
+  // Overlay for text
+  const overlay = h('div',{style:{position:'relative',zIndex:2,textAlign:'center',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100%'}});
+  overlay.appendChild(h('div',{className:'warp-glow'}));
+  overlay.appendChild(h('div',{className:'warp-text',id:'warp-status'},statusText));
+  overlay.appendChild(h('div',{className:'warp-sub',id:'warp-sub'},subText));
+  container.appendChild(overlay);
+
+  // Setup WebGL
+  const NUM_STARS = 3000;
+  const positions = new Float32Array(NUM_STARS * 3);
+  const speeds = new Float32Array(NUM_STARS);
+  const sizes = new Float32Array(NUM_STARS);
+
+  for (let i = 0; i < NUM_STARS; i++) {
+    positions[i*3] = (Math.random() - 0.5) * 4;     // x spread
+    positions[i*3+1] = (Math.random() - 0.5) * 4;   // y spread
+    positions[i*3+2] = Math.random() * 4;             // z depth
+    speeds[i] = 0.3 + Math.random() * 1.7;            // variable speed
+    sizes[i] = 1 + Math.random() * 3;                 // variable size
+  }
+
+  // Star program
+  const starVS = createShader(gl, gl.VERTEX_SHADER, WARP_VERT);
+  const starFS = createShader(gl, gl.FRAGMENT_SHADER, WARP_FRAG);
+  const starProg = createProgram(gl, starVS, starFS);
+
+  const aPosLoc = gl.getAttribLocation(starProg, 'aPos');
+  const aSpeedLoc = gl.getAttribLocation(starProg, 'aSpeed');
+  const aSizeLoc = gl.getAttribLocation(starProg, 'aSize');
+  const uTimeLoc = gl.getUniformLocation(starProg, 'uTime');
+  const uAspectLoc = gl.getUniformLocation(starProg, 'uAspect');
+
+  const posBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+  const speedBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, speedBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, speeds, gl.STATIC_DRAW);
+
+  const sizeBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, sizeBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, sizes, gl.STATIC_DRAW);
+
+  // Ring program
+  const ringVS = createShader(gl, gl.VERTEX_SHADER, RING_VERT);
+  const ringFS = createShader(gl, gl.FRAGMENT_SHADER, RING_FRAG);
+  const ringProg = createProgram(gl, ringVS, ringFS);
+  const ringPosLoc = gl.getAttribLocation(ringProg, 'aPos');
+  const ringTimeLoc = gl.getUniformLocation(ringProg, 'uTime');
+  const ringIdLoc = gl.getUniformLocation(ringProg, 'uRingId');
+  const ringAspectLoc = gl.getUniformLocation(ringProg, 'uAspect');
+
+  // Create ring geometry (circle line loop)
+  const RING_SEGS = 64;
+  const ringVerts = new Float32Array(RING_SEGS * 2);
+  for (let i = 0; i < RING_SEGS; i++) {
+    const a = (i / RING_SEGS) * Math.PI * 2;
+    ringVerts[i*2] = Math.cos(a) * 0.5;
+    ringVerts[i*2+1] = Math.sin(a) * 0.5;
+  }
+  const ringBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, ringBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, ringVerts, gl.STATIC_DRAW);
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // Additive blending for glow
+
+  let animId = null;
+  const startTime = performance.now();
+
+  function frame() {
+    const w = container.clientWidth || 600;
+    const hh = container.clientHeight || 300;
+    if (canvas.width !== w * 2 || canvas.height !== hh * 2) {
+      canvas.width = w * 2;
+      canvas.height = hh * 2;
+    }
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    const aspect = w / hh;
+    const time = (performance.now() - startTime) / 1000;
+
+    gl.clearColor(0.02, 0.0, 0.04, 1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    // Draw tunnel rings
+    gl.useProgram(ringProg);
+    gl.bindBuffer(gl.ARRAY_BUFFER, ringBuf);
+    gl.enableVertexAttribArray(ringPosLoc);
+    gl.vertexAttribPointer(ringPosLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.uniform1f(ringTimeLoc, time);
+    gl.uniform1f(ringAspectLoc, aspect);
+    for (let i = 0; i < 8; i++) {
+      gl.uniform1f(ringIdLoc, i);
+      gl.drawArrays(gl.LINE_LOOP, 0, RING_SEGS);
+    }
+    gl.disableVertexAttribArray(ringPosLoc);
+
+    // Draw stars
+    gl.useProgram(starProg);
+    gl.uniform1f(uTimeLoc, time);
+    gl.uniform1f(uAspectLoc, aspect);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+    gl.enableVertexAttribArray(aPosLoc);
+    gl.vertexAttribPointer(aPosLoc, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, speedBuf);
+    gl.enableVertexAttribArray(aSpeedLoc);
+    gl.vertexAttribPointer(aSpeedLoc, 1, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, sizeBuf);
+    gl.enableVertexAttribArray(aSizeLoc);
+    gl.vertexAttribPointer(aSizeLoc, 1, gl.FLOAT, false, 0, 0);
+
+    gl.drawArrays(gl.POINTS, 0, NUM_STARS);
+
+    animId = requestAnimationFrame(frame);
+  }
+
+  frame();
+
+  // Store cleanup function
+  warpGL = { animId, gl, canvas, stop: () => { if (animId) cancelAnimationFrame(animId); } };
+
+  return container;
+}
+
+// CSS fallback for no-WebGL browsers
+function buildWarpCSS(container, statusText, subText) {
   const stars = h('div',{className:'warp-stars'});
   for (let layer = 0; layer < 3; layer++) {
     const sl = h('div',{className:'warp-star-layer'});
     for (let i = 0; i < 40; i++) {
-      const star = h('div',{style:{
-        left: (Math.random()*100)+'%',
-        top: (Math.random()*100)+'%',
-        width: (1+Math.random()*2)+'px',
-        height: (1+Math.random()*2)+'px',
-        opacity: 0.3+Math.random()*0.7,
-      }});
-      sl.appendChild(star);
+      sl.appendChild(h('div',{style:{left:(Math.random()*100)+'%',top:(Math.random()*100)+'%',width:(1+Math.random()*2)+'px',height:(1+Math.random()*2)+'px',opacity:0.3+Math.random()*0.7}}));
     }
     stars.appendChild(sl);
   }
   container.appendChild(stars);
-
-  // Speed lines radiating from center
   const lines = h('div',{className:'warp-lines'});
   for (let i = 0; i < 24; i++) {
-    const angle = (i / 24) * 360;
-    const line = h('div',{className:'warp-line',style:{
-      transform: `rotate(${angle}deg)`,
-      animationDelay: `${-Math.random()*0.8}s`,
-      animationDuration: `${0.5+Math.random()*0.6}s`,
-    }});
-    lines.appendChild(line);
+    lines.appendChild(h('div',{className:'warp-line',style:{transform:`rotate(${(i/24)*360}deg)`,animationDelay:`${-Math.random()*0.8}s`,animationDuration:`${0.5+Math.random()*0.6}s`}}));
   }
   container.appendChild(lines);
-
-  // Tunnel rings
   const tunnel = h('div',{className:'warp-tunnel'});
-  for (let i = 0; i < 7; i++) {
-    tunnel.appendChild(h('div',{className:'warp-ring'}));
-  }
+  for (let i = 0; i < 7; i++) tunnel.appendChild(h('div',{className:'warp-ring'}));
   container.appendChild(tunnel);
-
-  // Grid lines (tesseract effect)
-  const grid = h('div',{className:'warp-grid'});
-  for (let i = 0; i < 8; i++) {
-    const hLine = h('div',{className:'warp-grid-line h',style:{
-      top: (10 + i*11)+'%',
-      animationDelay: `${-i*0.4}s`,
-    }});
-    const vLine = h('div',{className:'warp-grid-line v',style:{
-      left: (10 + i*11)+'%',
-      animationDelay: `${-i*0.3}s`,
-      animationName:'warpGridLine',
-    }});
-    // Override h lines to use scaleX, v lines to use scaleY
-    vLine.style.background = 'linear-gradient(to right, transparent, var(--purple), transparent)';
-    vLine.style.animation = 'warpGridLine 3s linear infinite';
-    vLine.style.animationDelay = `${-i*0.3}s`;
-    grid.appendChild(hLine);
-    grid.appendChild(vLine);
-  }
-  container.appendChild(grid);
-
-  // Central core + text
   const core = h('div',{className:'warp-core'});
   core.appendChild(h('div',{className:'warp-glow'}));
   core.appendChild(h('div',{className:'warp-text',id:'warp-status'},statusText));
   core.appendChild(h('div',{className:'warp-sub',id:'warp-sub'},subText));
   container.appendChild(core);
-
   return container;
 }
 
@@ -1709,6 +1891,10 @@ function updateWarpStatus(text, sub) {
   const subEl = document.getElementById('warp-sub');
   if (el) el.textContent = text;
   if (subEl) subEl.textContent = sub || '';
+}
+
+function stopWarp() {
+  if (warpGL) { warpGL.stop(); warpGL = null; }
 }
 
 // ═══ WHITEHAT TAB — One-click security audit ═══
@@ -1870,9 +2056,10 @@ async function runWhiteHatAudit() {
               if (d.status === 'running') {
                 updateWarpStatus(d.label || 'Scanning', `Step ${whState.steps.length}/7`);
               }
-              // Once first result comes in, switch from warp to results view
+              // Once first result comes in, stop warp and switch to results
               const doneSteps = whState.steps.filter(s => s.status === 'done' || s.status === 'error');
               if (doneSteps.length >= 1) {
+                stopWarp();
                 const el = document.getElementById('wh-results');
                 if (el) renderWhiteHatResults(el);
               }
