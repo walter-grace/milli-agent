@@ -1086,7 +1086,11 @@ async function runDirectSearch() {
   }
 
   // Handle GitHub URL — clone first
-  let searchPath = searchState.path;
+  let searchPath = searchState.path || '';
+  if (!searchPath && !searchState.repoUrl) {
+    // Default: clone milli-agent if nothing specified
+    searchState.repoUrl = 'https://github.com/walter-grace/milli-agent';
+  }
   if (searchState.repoUrl) {
     const parsed = searchState.repoUrl.match(/github\.com\/([^\/\s]+\/[^\/\s]+)/);
     if (parsed) {
