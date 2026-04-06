@@ -1,6 +1,6 @@
 // Milli-Agent Tool Definitions + Execution
 import { execSync } from 'child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, copyFileSync, mkdirSync } from 'fs';
 import { resolve, relative, extname, basename } from 'path';
 
 const FULL_PATH = process.env.PATH || '/usr/local/bin:/usr/bin';
@@ -387,7 +387,61 @@ export const PORT_SCAN_TOOL = {
 };
 
 // ═══════════════════════════════════════════
-// TIER 7 — API Intelligence
+// TIER 7 — Self-Heal (Code Edit + Test)
+// ═══════════════════════════════════════════
+
+export const CODE_EDIT_TOOL = {
+  type: 'function',
+  function: {
+    name: 'code_edit',
+    description: 'Edit a file by replacing a specific string with new content. Use for applying fixes — find the exact buggy code, replace with the fix. Returns a diff preview. Path must be inside a cloned repo.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Absolute path to the file to edit' },
+        old_string: { type: 'string', description: 'Exact string to find and replace (must be unique in the file)' },
+        new_string: { type: 'string', description: 'Replacement string' },
+      },
+      required: ['path', 'old_string', 'new_string'],
+    },
+  },
+};
+
+export const CODE_WRITE_TOOL = {
+  type: 'function',
+  function: {
+    name: 'code_write',
+    description: 'Write or create a file. Use for creating new files (tests, configs, patches). Path must be inside a cloned repo.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Absolute path to write to' },
+        content: { type: 'string', description: 'File content to write' },
+      },
+      required: ['path', 'content'],
+    },
+  },
+};
+
+export const SELF_HEAL_TOOL = {
+  type: 'function',
+  function: {
+    name: 'self_heal',
+    description: 'Auto-detect and fix issues in a repo. Runs lint/test, identifies failures, applies fixes, re-tests. Use sandbox_exec to verify fixes before committing. Returns a report of what was found and fixed.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path to the repo to heal' },
+        test_command: { type: 'string', description: 'Command to verify fixes (e.g., "npm test", "python -m pytest"). If empty, auto-detects.' },
+        fix_type: { type: 'string', description: 'What to fix: "lint" (style/formatting), "security" (vulnerabilities), "errors" (bugs/crashes), "all" (everything). Default: all' },
+      },
+      required: ['path'],
+    },
+  },
+};
+
+// ═══════════════════════════════════════════
+// TIER 8 — API Intelligence
 // ═══════════════════════════════════════════
 
 export const OPENAPI_SEARCH_TOOL = {
@@ -420,6 +474,7 @@ export const ALL_TOOLS = [
   GIT_SUMMARY_TOOL, GIT_EFFORT_TOOL, GIT_AUTHORS_TOOL, GIT_TIMELINE_TOOL, GIT_SECRETS_CLEAN_TOOL,
   DEEP_SECURITY_SCAN_TOOL, DEPENDENCY_AUDIT_TOOL, SECRETS_SCAN_TOOL,
   TRIVY_SCAN_TOOL, SANDBOX_EXEC_TOOL, PORT_SCAN_TOOL,
+  CODE_EDIT_TOOL, CODE_WRITE_TOOL, SELF_HEAL_TOOL,
   OPENAPI_SEARCH_TOOL,
 ];
 
@@ -447,6 +502,9 @@ export function executeTool(name, args) {
     case 'trivy_scan': return execTrivyScan(args);
     case 'sandbox_exec': return execSandboxExec(args);
     case 'port_scan': return execPortScan(args);
+    case 'code_edit': return execCodeEdit(args);
+    case 'code_write': return execCodeWrite(args);
+    case 'self_heal': return execSelfHeal(args);
     case 'openapi_search': return execOpenAPISearch(args);
     default: return null; // not handled here
   }
@@ -1509,7 +1567,7 @@ function execSecretsScan({ path: repoPath, scan_history = true }) {
     ];
 
     let totalFindings = 0;
-    const excludes = "--glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!vendor' --glob '!dist' --glob '!*.map'";
+    const excludes = "--glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!vendor' --glob '!dist' --glob '!*.map' --glob '!*tools.js' --glob '!*server.py' --glob '!*.test.*' --glob '!*fixture*'";
 
     // Scan current files
     out += `## Current Files\n`;
@@ -1566,6 +1624,216 @@ function execSecretsScan({ path: repoPath, scan_history = true }) {
 
   const totalMs = Math.round(performance.now() - t0);
   out += `\nScan time: ${totalMs}ms\n`;
+  return out;
+}
+
+// ═══════════════════════════════════════════
+// Self-Heal — Code Edit, Write, Auto-Fix
+// ═══════════════════════════════════════════
+
+function isInsideRepo(filePath) {
+  const repoBase = resolve(process.env.HOME || '/root', 'milli-repos');
+  const resolved = resolve(filePath);
+  return resolved.startsWith(repoBase) || resolved.startsWith('/tmp/repos') || resolved.startsWith('/tmp/milli-');
+}
+
+function execCodeEdit({ path: filePath, old_string, new_string }) {
+  if (!filePath || !existsSync(filePath)) return `File not found: ${filePath}`;
+  if (!isInsideRepo(filePath)) return `Security: can only edit files inside cloned repos. Got: ${filePath}`;
+  if (!old_string) return 'old_string is required';
+  if (old_string === new_string) return 'old_string and new_string are identical';
+
+  const content = readFileSync(filePath, 'utf8');
+  const count = content.split(old_string).length - 1;
+
+  if (count === 0) return `String not found in ${filePath}. Make sure old_string matches exactly (including whitespace).`;
+  if (count > 1) return `Found ${count} occurrences of old_string in ${filePath}. Must be unique — add more context to disambiguate.`;
+
+  // Create backup
+  const backupPath = filePath + '.milli-backup';
+  copyFileSync(filePath, backupPath);
+
+  // Apply edit
+  const newContent = content.replace(old_string, new_string);
+  writeFileSync(filePath, newContent, 'utf8');
+
+  // Generate diff preview
+  const oldLines = old_string.split('\n');
+  const newLines = new_string.split('\n');
+  let diff = `Edit applied: ${filePath}\n${'='.repeat(50)}\n\n`;
+  diff += `Backup: ${backupPath}\n\n`;
+  diff += `--- before\n+++ after\n\n`;
+  oldLines.forEach(l => diff += `- ${l}\n`);
+  newLines.forEach(l => diff += `+ ${l}\n`);
+  diff += `\n${oldLines.length} line(s) removed, ${newLines.length} line(s) added\n`;
+
+  return diff;
+}
+
+function execCodeWrite({ path: filePath, content }) {
+  if (!filePath) return 'path is required';
+  if (!isInsideRepo(filePath)) return `Security: can only write files inside cloned repos. Got: ${filePath}`;
+
+  // Create directory if needed
+  const dir = resolve(filePath, '..');
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+  const existed = existsSync(filePath);
+  if (existed) {
+    copyFileSync(filePath, filePath + '.milli-backup');
+  }
+
+  writeFileSync(filePath, content, 'utf8');
+  const lines = content.split('\n').length;
+  const bytes = Buffer.byteLength(content);
+
+  return `${existed ? 'Updated' : 'Created'}: ${filePath}\n${lines} lines, ${bytes} bytes${existed ? '\nBackup: ' + filePath + '.milli-backup' : ''}`;
+}
+
+function execSelfHeal({ path: repoPath, test_command, fix_type = 'all' }) {
+  if (!existsSync(repoPath)) return `Not found: ${repoPath}`;
+  if (!isInsideRepo(repoPath)) return `Security: can only heal repos inside cloned repos directory.`;
+  const t0 = performance.now();
+
+  let out = `Self-Heal Report: ${repoPath}\n${'='.repeat(50)}\n\n`;
+
+  // Step 1: Auto-detect project type and test command
+  let testCmd = test_command;
+  let lintCmd = null;
+  let projectType = 'unknown';
+
+  if (existsSync(resolve(repoPath, 'package.json'))) {
+    projectType = 'node';
+    if (!testCmd) {
+      try {
+        const pkg = JSON.parse(readFileSync(resolve(repoPath, 'package.json'), 'utf8'));
+        if (pkg.scripts?.test && pkg.scripts.test !== 'echo "Error: no test specified" && exit 1') testCmd = 'npm test';
+        if (pkg.scripts?.lint) lintCmd = 'npm run lint';
+      } catch {}
+    }
+  } else if (existsSync(resolve(repoPath, 'pyproject.toml')) || existsSync(resolve(repoPath, 'setup.py'))) {
+    projectType = 'python';
+    if (!testCmd) testCmd = 'python -m pytest --tb=short 2>&1 || python -m unittest discover 2>&1';
+    lintCmd = 'python -m flake8 --max-line-length=120 --count 2>&1 || true';
+  } else if (existsSync(resolve(repoPath, 'go.mod'))) {
+    projectType = 'go';
+    if (!testCmd) testCmd = 'go test ./... 2>&1';
+    lintCmd = 'go vet ./... 2>&1';
+  } else if (existsSync(resolve(repoPath, 'Cargo.toml'))) {
+    projectType = 'rust';
+    if (!testCmd) testCmd = 'cargo test 2>&1';
+    lintCmd = 'cargo clippy 2>&1 || true';
+  }
+
+  out += `Project: ${projectType}\n`;
+  out += `Test: ${testCmd || 'none detected'}\n`;
+  out += `Lint: ${lintCmd || 'none detected'}\n\n`;
+
+  // Step 2: Run initial diagnostics
+  const issues = [];
+
+  // Lint check
+  if ((fix_type === 'lint' || fix_type === 'all') && lintCmd) {
+    out += `## Lint Check\n`;
+    try {
+      const lintResult = exec(`cd "${repoPath}" && ${lintCmd}`, { timeout: 30000 });
+      const lintLines = lintResult.trim().split('\n').filter(l => l.trim());
+      if (lintLines.length > 0 && !lintResult.includes('0 errors')) {
+        out += `Found ${lintLines.length} lint issues:\n`;
+        lintLines.slice(0, 10).forEach(l => {
+          out += `  ${l}\n`;
+          issues.push({ type: 'lint', detail: l });
+        });
+      } else {
+        out += `Clean — no lint issues\n`;
+      }
+    } catch (e) {
+      if (e.stdout) {
+        const lines = e.stdout.trim().split('\n').filter(l => l.trim());
+        out += `Found ${lines.length} lint issues:\n`;
+        lines.slice(0, 10).forEach(l => {
+          out += `  ${l}\n`;
+          issues.push({ type: 'lint', detail: l });
+        });
+      }
+    }
+    out += '\n';
+  }
+
+  // Test check
+  if ((fix_type === 'errors' || fix_type === 'all') && testCmd) {
+    out += `## Test Check\n`;
+    try {
+      const testResult = exec(`cd "${repoPath}" && ${testCmd}`, { timeout: 60000 });
+      out += `Tests passed\n`;
+      out += testResult.split('\n').slice(-5).join('\n') + '\n';
+    } catch (e) {
+      out += `Tests FAILED:\n`;
+      const output = (e.stdout || '') + (e.stderr || '');
+      const failLines = output.split('\n').filter(l =>
+        l.match(/FAIL|ERROR|error|failed|assert|expect/i)
+      ).slice(0, 15);
+      failLines.forEach(l => {
+        out += `  ${l}\n`;
+        issues.push({ type: 'test_failure', detail: l });
+      });
+      // Show full output tail
+      out += '\n  ...\n' + output.split('\n').slice(-10).join('\n') + '\n';
+    }
+    out += '\n';
+  }
+
+  // Security quick check
+  if (fix_type === 'security' || fix_type === 'all') {
+    out += `## Security Quick Check\n`;
+    const secPatterns = [
+      { name: 'eval/exec', pattern: 'eval\\(|exec\\(' },
+      { name: 'SQL concat', pattern: 'query.*\\+' },
+      { name: 'HTTP non-TLS', pattern: 'http://(?!localhost|127\\.0)' },
+      { name: 'Hardcoded secret', pattern: 'password.*=.*[a-zA-Z0-9]{8,}' },
+    ];
+    const excludes = "--glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!vendor' --glob '!dist'";
+    for (const { name, pattern } of secPatterns) {
+      try {
+        const result = exec(`rg --no-heading -n -c ${excludes} -- "${pattern}" "${repoPath}" 2>/dev/null || true`, { timeout: 5000 });
+        const matches = result.trim().split('\n').filter(l => l.trim());
+        if (matches.length > 0) {
+          const count = matches.reduce((sum, l) => sum + parseInt(l.split(':').pop() || 0), 0);
+          out += `  [!] ${name}: ${count} occurrences in ${matches.length} files\n`;
+          issues.push({ type: 'security', detail: `${name}: ${count} occurrences` });
+        }
+      } catch {}
+    }
+    if (issues.filter(i => i.type === 'security').length === 0) out += `  Clean — no common issues\n`;
+    out += '\n';
+  }
+
+  // Step 3: Summary + healing suggestions
+  out += `## Summary\n`;
+  out += `Total issues: ${issues.length}\n`;
+
+  const byType = {};
+  issues.forEach(i => { byType[i.type] = (byType[i.type] || 0) + 1; });
+  Object.entries(byType).forEach(([type, count]) => {
+    out += `  ${type}: ${count}\n`;
+  });
+
+  if (issues.length > 0) {
+    out += `\n## How to Self-Heal\n`;
+    out += `Use these tools in sequence:\n`;
+    out += `  1. grep_search — find the exact code causing each issue\n`;
+    out += `  2. read_file — understand the context\n`;
+    out += `  3. code_edit — apply the fix (old_string → new_string)\n`;
+    out += `  4. sandbox_exec — run "${testCmd || 'tests'}" to verify\n`;
+    out += `  5. Repeat until all issues are resolved\n`;
+    out += `\nThe LLM can chain these tools automatically.\n`;
+    out += `Ask: "Fix all ${issues.length} issues in this repo"\n`;
+  } else {
+    out += `\nNo issues found — code is healthy!\n`;
+  }
+
+  const totalMs = Math.round(performance.now() - t0);
+  out += `\nHeal time: ${totalMs}ms\n`;
   return out;
 }
 

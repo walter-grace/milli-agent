@@ -163,6 +163,7 @@ function render() {
     else if (state.tab==='chat') content.appendChild(renderChat());
     else if (state.tab==='api') content.appendChild(renderAPI());
     else if (state.tab==='whitehat') content.appendChild(renderWhiteHat());
+    else if (state.tab==='heal') content.appendChild(renderHeal());
     else content.appendChild(renderCompare());
     app.appendChild(content);
     currentTab = state.tab;
@@ -248,6 +249,7 @@ const NAV_ITEMS = [
   { id:'compare', icon:'🏎', label:'Compare', desc:'Race servers' },
   { id:'api', icon:'📡', label:'API', desc:'OpenAPI specs' },
   { id:'whitehat', icon:'🛡', label:'WhiteHat', desc:'Security audit' },
+  { id:'heal', icon:'🧬', label:'Heal', desc:'Self-healing code' },
 ];
 
 function buildNav() {
@@ -1557,6 +1559,146 @@ async function runWhiteHatAudit() {
   whState.scanning = false;
   const el = document.getElementById('wh-results');
   if (el) renderWhiteHatResults(el);
+}
+
+// ═══ HEAL TAB — Self-healing code ═══
+let healState = { repo: 'https://github.com/walter-grace/milli-agent', healing: false, steps: [] };
+
+function renderHeal() {
+  const main = h('div',{style:{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden'}});
+
+  const top = h('div',{style:{padding:'20px 24px',flexShrink:0,borderBottom:'1px solid var(--border)'}});
+  top.appendChild(h('h2',{style:{fontSize:'16px',fontWeight:700,marginBottom:'2px'}},'Self-Heal'));
+  top.appendChild(h('p',{style:{fontSize:'12px',color:'var(--fg3)',marginBottom:'14px'}},'Clone a repo, diagnose issues, generate fixes, test in sandbox. Auto-repair loop.'));
+
+  const row = h('div',{style:{display:'flex',gap:'8px',marginBottom:'12px'}});
+  const input = document.createElement('input');
+  input.className = 'sinput';
+  input.placeholder = 'GitHub URL or owner/repo...';
+  input.value = healState.repo;
+  input.style.cssText = 'flex:1;font-size:14px;';
+  input.addEventListener('input', e => healState.repo = e.target.value);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') runHeal(); });
+
+  const btn = h('button',{className:'sbtn',style:{padding:'12px 28px',fontSize:'14px',fontWeight:700,background:healState.healing?'var(--bg3)':'var(--green)',color:'#000'},onClick:runHeal},
+    healState.healing ? 'Healing...' : 'Heal');
+  row.append(input, btn);
+  top.appendChild(row);
+
+  const presets = h('div',{style:{display:'flex',flexWrap:'wrap',gap:'6px'}});
+  [['Milli-Agent','walter-grace/milli-agent'],['Express','expressjs/express'],['FastAPI','tiangolo/fastapi']].forEach(([label,repo]) => {
+    presets.appendChild(h('button',{className:'pre',onClick:()=>{healState.repo='https://github.com/'+repo;input.value=healState.repo;}},label));
+  });
+  top.appendChild(presets);
+  main.appendChild(top);
+
+  const results = h('div',{id:'heal-results',style:{flex:1,overflowY:'auto',padding:'16px 24px'}});
+
+  if (healState.steps.length > 0) {
+    healState.steps.forEach(step => {
+      const card = h('div',{style:{borderRadius:'var(--radius)',border:'1px solid var(--border)',overflow:'hidden',background:'var(--bg2)',marginBottom:'12px',animation:'fadeIn .3s ease-out'}});
+      const statusColor = step.status === 'done' ? 'var(--green)' : step.status === 'error' ? 'var(--red)' : 'var(--yellow)';
+      const icon = step.status === 'done' ? '✓' : step.status === 'error' ? '✗' : '⟳';
+      const phaseLabels = { clone: 'Clone', diagnose: 'Diagnose', fix: 'AI Fix Plan' };
+
+      const hd = h('div',{style:{display:'flex',alignItems:'center',gap:'8px',padding:'10px 14px',borderBottom:'1px solid var(--bg3)',cursor:'pointer'},onClick:()=>{
+        const body = card.querySelector('pre');
+        if (body) body.style.display = body.style.display === 'none' ? 'block' : 'none';
+      }});
+      hd.appendChild(h('span',{style:{color:statusColor,fontWeight:700,fontSize:'14px'}},icon));
+      hd.appendChild(h('span',{style:{fontWeight:600,fontSize:'13px'}},phaseLabels[step.phase] || step.phase));
+      if (step.status === 'running') hd.appendChild(h('span',{className:'spinner',style:{marginLeft:'auto'}}));
+      card.appendChild(hd);
+
+      if (step.text) {
+        const body = h('pre',{style:{padding:'12px 14px',maxHeight:'400px',overflowY:'auto',fontSize:'11px',fontFamily:'JetBrains Mono,monospace',lineHeight:'1.6',color:'var(--fg2)',whiteSpace:'pre-wrap',margin:0}});
+        body.textContent = step.text;
+        card.appendChild(body);
+      }
+
+      results.appendChild(card);
+    });
+  } else {
+    results.appendChild(h('div',{style:{textAlign:'center',paddingTop:'60px'}},
+      h('div',{style:{fontSize:'48px',marginBottom:'16px'}},'🧬'),
+      h('div',{style:{fontSize:'16px',fontWeight:600,marginBottom:'8px'}},'Self-Healing Pipeline'),
+      h('div',{style:{fontSize:'13px',color:'var(--fg3)',maxWidth:'500px',margin:'0 auto',lineHeight:'1.6'}},
+        'Clone → Diagnose (lint + tests + security) → AI generates fixes → Apply edits → Test in sandbox → Repeat until green.'),
+    ));
+  }
+
+  main.appendChild(results);
+  return main;
+}
+
+async function runHeal() {
+  if (healState.healing || !healState.repo.trim()) return;
+  healState.healing = true;
+  healState.steps = [];
+  currentTab = null; render();
+
+  let repo = healState.repo.trim();
+  const ghMatch = repo.match(/github\.com\/([^\/\s]+\/[^\/\s]+)/);
+  if (ghMatch) repo = ghMatch[1];
+
+  try {
+    const response = await fetch('/api/heal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo, model: state.model }),
+    });
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (!done) buffer += decoder.decode(value, { stream: true });
+      else buffer += decoder.decode();
+      const lines = buffer.split('\n');
+      buffer = done ? '' : lines.pop();
+      let evt = null;
+      for (const line of lines) {
+        if (line.startsWith('event: ')) evt = line.slice(7).trim();
+        else if (line.startsWith('data: ') && evt) {
+          try {
+            const d = JSON.parse(line.slice(6));
+            if (evt === 'step') {
+              const existing = healState.steps.find(s => s.phase === d.phase);
+              if (existing) Object.assign(existing, d);
+              else healState.steps.push(d);
+              const el = document.getElementById('heal-results');
+              if (el) { el.innerHTML = ''; healState.steps.forEach(renderHealStep.bind(null, el)); }
+            }
+          } catch {}
+          evt = null;
+        }
+      }
+      if (done) break;
+    }
+  } catch (e) {
+    healState.steps.push({ phase: 'error', status: 'error', text: e.message });
+  }
+  healState.healing = false;
+  currentTab = null; render();
+}
+
+function renderHealStep(container, step) {
+  const card = h('div',{style:{borderRadius:'var(--radius)',border:'1px solid var(--border)',overflow:'hidden',background:'var(--bg2)',marginBottom:'12px'}});
+  const statusColor = step.status === 'done' ? 'var(--green)' : step.status === 'error' ? 'var(--red)' : 'var(--yellow)';
+  const icon = step.status === 'done' ? '✓' : step.status === 'error' ? '✗' : '⟳';
+  const labels = { clone:'Clone', diagnose:'Diagnose', fix:'AI Fix Plan' };
+  const hd = h('div',{style:{display:'flex',alignItems:'center',gap:'8px',padding:'10px 14px',borderBottom:'1px solid var(--bg3)'}},
+    h('span',{style:{color:statusColor,fontWeight:700}},icon),
+    h('span',{style:{fontWeight:600,fontSize:'13px'}},labels[step.phase]||step.phase),
+    step.status==='running'?h('span',{className:'spinner',style:{marginLeft:'auto'}}):null);
+  card.appendChild(hd);
+  if (step.text) {
+    const body = h('pre',{style:{padding:'12px 14px',maxHeight:'400px',overflowY:'auto',fontSize:'11px',fontFamily:'JetBrains Mono,monospace',lineHeight:'1.6',color:'var(--fg2)',whiteSpace:'pre-wrap',margin:0}});
+    body.textContent = step.text;
+    card.appendChild(body);
+  }
+  container.appendChild(card);
 }
 
 // Init

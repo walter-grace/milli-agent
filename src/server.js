@@ -356,6 +356,11 @@ SECURITY (White-Hat):
 - port_scan — find exposed ports, network bindings, CORS wildcards, disabled TLS, privileged containers
 - sandbox_exec — run commands in sandboxed environment (tests, linting, builds) on cloned repos
 
+SELF-HEAL:
+- code_edit — edit a file by replacing exact string with new content. Creates backup. Path must be inside cloned repo.
+- code_write — create or overwrite a file. Creates backup if file exists.
+- self_heal — auto-detect issues (lint, test failures, security), report what's broken, suggest fix chain
+
 DEEP UNDERSTANDING:
 - repo_summary — comprehensive repo overview (README + structure + deps + stats)
 - knowledge_graph — build module map: imports, exports, definitions, relationships
@@ -371,7 +376,9 @@ STRATEGY:
 5. Be specific: name files, line numbers. Use targeted regex patterns.
 6. Chain tools: search → read → analyze. Don't stop at search results.
 7. For security reviews: deep_security_scan → dependency_audit → secrets_scan → read_file on flagged files
-8. Compare models: use different models on the same security scan to find what each catches` }
+8. Compare models: use different models on the same security scan to find what each catches
+9. For self-healing: self_heal → identify issues → code_edit to fix → sandbox_exec to test → repeat until green
+10. Always backup before editing: code_edit creates .milli-backup files automatically` }
   ];
   try { if (history) { const h = Array.isArray(history) ? history : JSON.parse(history); conversationHistory.push(...h); } } catch {}
   conversationHistory.push({ role: 'user', content: message });
@@ -746,6 +753,53 @@ app.post('/api/openapi/race', async (req, res) => {
   }));
 
   res.json(results);
+});
+
+// Self-heal endpoint — diagnose, fix, test loop
+app.post('/api/heal', async (req, res) => {
+  const { repo, path: localPath, test_command, fix_type = 'all' } = req.body;
+  if (!repo && !localPath) return res.status(400).json({ error: 'repo or path required' });
+
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+  let repoPath = localPath;
+  if (repo && !localPath) {
+    send('step', { phase: 'clone', status: 'running', text: 'Cloning ' + repo + '...' });
+    repoPath = cloneOrGetRepo(repo);
+    if (!repoPath) { send('step', { phase: 'clone', status: 'error', text: 'Clone failed' }); res.end(); return; }
+    send('step', { phase: 'clone', status: 'done', text: 'Cloned to ' + repoPath });
+  }
+
+  // Step 1: Diagnose
+  send('step', { phase: 'diagnose', status: 'running', text: 'Running self_heal diagnostics...' });
+  const diagResult = executeTool('self_heal', { path: repoPath, test_command, fix_type });
+  send('step', { phase: 'diagnose', status: 'done', text: diagResult });
+
+  // Step 2: Ask LLM to generate fixes based on diagnosis
+  send('step', { phase: 'fix', status: 'running', text: 'AI analyzing issues and generating fixes...' });
+  try {
+    const messages = [
+      { role: 'system', content: `You are a code repair agent. Given diagnostic output from a self-heal scan, generate specific code_edit tool calls to fix the issues. For each fix:
+1. Use grep_search to find the exact code
+2. Use read_file to understand context
+3. Use code_edit to apply the fix
+4. Use sandbox_exec to test
+
+Respond with a clear action plan. Be specific about what to change.` },
+      { role: 'user', content: `Here is the self-heal diagnostic for ${repoPath}:\n\n${diagResult}\n\nGenerate fixes for the top issues found. Be specific with file paths and code changes.` }
+    ];
+
+    const model = req.body.model || 'google/gemma-4-26b-a4b-it';
+    const completion = await chatWithRetry(messages, model);
+    const fixPlan = completion.choices?.[0]?.message?.content || 'No fix plan generated';
+    send('step', { phase: 'fix', status: 'done', text: fixPlan });
+  } catch (e) {
+    send('step', { phase: 'fix', status: 'error', text: 'LLM error: ' + e.message });
+  }
+
+  send('complete', { repoPath });
+  res.end();
 });
 
 // White-hat full security audit — runs all security tools, streams results via SSE
