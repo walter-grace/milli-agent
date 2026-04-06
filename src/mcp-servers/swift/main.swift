@@ -238,6 +238,146 @@ func openapiSearch(args: [String: Any]) -> String {
 }
 
 // Tool definitions for tools/list
+// ─── File ops ───
+func readFileTool(args: [String: Any]) -> String {
+    guard let filePath = args["path"] as? String, !filePath.isEmpty else { return "path required" }
+    let startLine = args["start_line"] as? Int ?? 1
+    let fm = FileManager.default
+    if !fm.fileExists(atPath: filePath) { return "File not found: \(filePath)" }
+    var isDir: ObjCBool = false
+    fm.fileExists(atPath: filePath, isDirectory: &isDir)
+    if isDir.boolValue { return "\(filePath) is a directory" }
+
+    do {
+        let attrs = try fm.attributesOfItem(atPath: filePath)
+        let size = (attrs[.size] as? Int) ?? 0
+        if size > 1024 * 1024 { return "File too large" }
+        let content = try String(contentsOfFile: filePath, encoding: .utf8)
+        let lines = content.components(separatedBy: "\n")
+        let endLine = (args["end_line"] as? Int) ?? min(startLine + 100, lines.count)
+        let actualEnd = min(endLine, lines.count)
+        let actualStart = max(startLine, 1)
+        var out = "File: \(filePath) (\(lines.count) lines, \(Double(size)/1024.0)KB)\n"
+        out += "Showing lines \(actualStart)-\(actualEnd):\n\n"
+        for i in (actualStart - 1)..<actualEnd {
+            if i < lines.count {
+                out += "\(i+1)|\(lines[i])\n"
+            }
+        }
+        return out
+    } catch { return "Error: \(error)" }
+}
+
+func listFilesTool(args: [String: Any]) -> String {
+    guard let dirPath = args["path"] as? String, !dirPath.isEmpty else { return "path required" }
+    let recursive = args["recursive"] as? Bool ?? false
+    let fm = FileManager.default
+    if !fm.fileExists(atPath: dirPath) { return "Directory not found: \(dirPath)" }
+
+    do {
+        if recursive {
+            var files: [String] = []
+            if let enumerator = fm.enumerator(atPath: dirPath) {
+                while let f = enumerator.nextObject() as? String {
+                    let parts = f.components(separatedBy: "/")
+                    if parts.contains(".git") || parts.contains("node_modules") || parts.contains("target") || parts.contains("dist") { continue }
+                    let full = (dirPath as NSString).appendingPathComponent(f)
+                    var isDir: ObjCBool = false
+                    fm.fileExists(atPath: full, isDirectory: &isDir)
+                    if !isDir.boolValue {
+                        files.append(full)
+                        if files.count >= 500 { break }
+                    }
+                }
+            }
+            var out = "\(dirPath) (\(files.count) files)\n\n"
+            for f in files { out += "  \(f)\n" }
+            return out
+        } else {
+            let entries = try fm.contentsOfDirectory(atPath: dirPath).sorted { a, b in
+                let aPath = (dirPath as NSString).appendingPathComponent(a)
+                let bPath = (dirPath as NSString).appendingPathComponent(b)
+                var aDir: ObjCBool = false; var bDir: ObjCBool = false
+                fm.fileExists(atPath: aPath, isDirectory: &aDir)
+                fm.fileExists(atPath: bPath, isDirectory: &bDir)
+                if aDir.boolValue != bDir.boolValue { return aDir.boolValue }
+                return a < b
+            }
+            var out = "\(dirPath)/\n\n"
+            for name in entries {
+                let full = (dirPath as NSString).appendingPathComponent(name)
+                var isDir: ObjCBool = false
+                fm.fileExists(atPath: full, isDirectory: &isDir)
+                if isDir.boolValue {
+                    out += "  DIR  \(name)/\n"
+                } else if let attrs = try? fm.attributesOfItem(atPath: full), let sz = attrs[.size] as? Int {
+                    let szStr: String
+                    if sz > 1024*1024 { szStr = String(format: "%.1fMB", Double(sz)/1024.0/1024.0) }
+                    else if sz > 1024 { szStr = String(format: "%.1fKB", Double(sz)/1024.0) }
+                    else { szStr = "\(sz)B" }
+                    out += "  FILE \(name) (\(szStr))\n"
+                }
+            }
+            return out
+        }
+    } catch { return "Error: \(error)" }
+}
+
+func codeStatsTool(args: [String: Any]) -> String {
+    guard let dirPath = args["path"] as? String, !dirPath.isEmpty else { return "path required" }
+    let fm = FileManager.default
+    if !fm.fileExists(atPath: dirPath) { return "Not found: \(dirPath)" }
+
+    var extCounts: [String: Int] = [:]
+    var extLines: [String: Int] = [:]
+    var totalLines = 0
+    var totalSize = 0
+    var fileCount = 0
+
+    if let enumerator = fm.enumerator(atPath: dirPath) {
+        while let f = enumerator.nextObject() as? String {
+            if fileCount >= 5000 { break }
+            let parts = f.components(separatedBy: "/")
+            if parts.contains(".git") || parts.contains("node_modules") || parts.contains("target") || parts.contains("dist") { continue }
+            let full = (dirPath as NSString).appendingPathComponent(f)
+            var isDir: ObjCBool = false
+            fm.fileExists(atPath: full, isDirectory: &isDir)
+            if isDir.boolValue { continue }
+            fileCount += 1
+            let nsName = f as NSString
+            let ext = nsName.pathExtension.isEmpty ? "" : ".\(nsName.pathExtension)"
+            extCounts[ext, default: 0] += 1
+            if let attrs = try? fm.attributesOfItem(atPath: full), let sz = attrs[.size] as? Int {
+                totalSize += sz
+                if sz < 512 * 1024, let content = try? String(contentsOfFile: full, encoding: .utf8) {
+                    let n = content.components(separatedBy: "\n").count
+                    extLines[ext, default: 0] += n
+                    totalLines += n
+                }
+            }
+        }
+    }
+
+    let langMap: [String: String] = [
+        ".js":"JavaScript",".ts":"TypeScript",".py":"Python",".go":"Go",".rs":"Rust",
+        ".zig":"Zig",".swift":"Swift",".c":"C",".cpp":"C++",".h":"C/C++ Header",
+        ".java":"Java",".rb":"Ruby",".md":"Markdown",".json":"JSON",".yaml":"YAML",
+        ".yml":"YAML",".toml":"TOML",".html":"HTML",".css":"CSS",".sh":"Shell"
+    ]
+
+    var out = "Code Stats [Swift]: \(dirPath)\n\(String(repeating: "=", count: 50))\n\n"
+    out += "Total: \(fileCount) files, \(totalLines) lines, \(String(format: "%.1f", Double(totalSize)/1024.0/1024.0))MB\n\nLanguage Breakdown:\n"
+
+    let sorted = extLines.sorted { $0.value > $1.value }
+    for (ext, lines) in sorted {
+        let lang = langMap[ext] ?? ext
+        let count = extCounts[ext] ?? 0
+        let pct = totalLines > 0 ? Double(lines) * 100.0 / Double(totalLines) : 0
+        out += "  \(lang.padding(toLength: 20, withPad: " ", startingAt: 0)) \(String(format: "%8d", lines)) lines  \(String(format: "%4d", count)) files  \(String(format: "%.1f", pct))%\n"
+    }
+    return out
+}
+
 let toolDefs: [[String: Any]] = [
     [
         "name": "grep_search",
@@ -293,10 +433,12 @@ while let line = readLine() {
         let toolName = params["name"] as? String ?? "grep_search"
         let args = params["arguments"] as? [String: Any] ?? [:]
         let text: String
-        if toolName == "openapi_search" {
-            text = openapiSearch(args: args)
-        } else {
-            text = grepSearch(args: args)
+        switch toolName {
+        case "openapi_search": text = openapiSearch(args: args)
+        case "read_file": text = readFileTool(args: args)
+        case "list_files": text = listFilesTool(args: args)
+        case "code_stats": text = codeStatsTool(args: args)
+        default: text = grepSearch(args: args)
         }
         response = respond(id: id, result: [
             "content": [["type": "text", "text": text]]

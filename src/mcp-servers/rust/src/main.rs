@@ -5,6 +5,7 @@ use std::process::Command;
 use std::fs;
 use std::path::Path;
 use std::time::Instant;
+use std::collections::HashMap;
 
 #[derive(Deserialize)]
 struct JsonRpcRequest {
@@ -269,16 +270,184 @@ fn handle_openapi_search(params: &Value) -> String {
     out
 }
 
+// ─── File ops: read_file, list_files, code_stats ───
+
+fn handle_read_file(params: &Value) -> String {
+    let empty = json!({});
+    let args = params.get("arguments").unwrap_or(&empty);
+    let file_path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let start_line = args.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+    let end_line_opt = args.get("end_line").and_then(|v| v.as_u64()).map(|v| v as usize);
+
+    if file_path.is_empty() { return "path required".to_string(); }
+    let path = Path::new(file_path);
+    if !path.exists() { return format!("File not found: {}", file_path); }
+    if !path.is_file() { return format!("{} is a directory", file_path); }
+
+    let metadata = match fs::metadata(path) { Ok(m) => m, Err(e) => return format!("Error: {}", e) };
+    if metadata.len() > 1024 * 1024 { return format!("File too large ({:.1}MB)", metadata.len() as f64 / 1024.0 / 1024.0); }
+
+    let content = match fs::read_to_string(path) { Ok(c) => c, Err(e) => return format!("Error: {}", e) };
+    let lines: Vec<&str> = content.lines().collect();
+    let end = end_line_opt.unwrap_or((start_line + 100).min(lines.len()));
+    let end = end.min(lines.len());
+    let start = start_line.max(1);
+
+    let mut out = format!("File: {} ({} lines, {:.1}KB)\nShowing lines {}-{}:\n\n",
+        file_path, lines.len(), metadata.len() as f64 / 1024.0, start, end);
+    for i in (start - 1)..end {
+        if i < lines.len() {
+            out.push_str(&format!("{}|{}\n", i + 1, lines[i]));
+        }
+    }
+    out
+}
+
+fn handle_list_files(params: &Value) -> String {
+    let empty = json!({});
+    let args = params.get("arguments").unwrap_or(&empty);
+    let dir_path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let recursive = args.get("recursive").and_then(|v| v.as_bool()).unwrap_or(false);
+    let glob_filter = args.get("glob").and_then(|v| v.as_str());
+
+    if dir_path.is_empty() { return "path required".to_string(); }
+    let path = Path::new(dir_path);
+    if !path.exists() { return format!("Directory not found: {}", dir_path); }
+
+    if recursive {
+        let mut files = Vec::new();
+        let mut count = 0;
+        fn walk(p: &Path, files: &mut Vec<String>, count: &mut usize, glob: Option<&str>) {
+            if *count >= 500 { return; }
+            if let Ok(entries) = fs::read_dir(p) {
+                for entry in entries.flatten() {
+                    if *count >= 500 { return; }
+                    let path = entry.path();
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name == ".git" || name == "node_modules" || name == "target" || name == "dist" { continue; }
+                    if path.is_dir() {
+                        walk(&path, files, count, glob);
+                    } else {
+                        if let Some(g) = glob {
+                            if !name.contains(&g.replace('*', "")) { continue; }
+                        }
+                        files.push(path.to_string_lossy().to_string());
+                        *count += 1;
+                    }
+                }
+            }
+        }
+        walk(path, &mut files, &mut count, glob_filter);
+        let mut out = format!("{} ({} files)\n\n", dir_path, files.len());
+        for f in files { out.push_str(&format!("  {}\n", f)); }
+        out
+    } else {
+        let mut entries: Vec<_> = match fs::read_dir(path) {
+            Ok(e) => e.flatten().collect(),
+            Err(e) => return format!("Error: {}", e),
+        };
+        entries.sort_by(|a, b| {
+            let a_dir = a.path().is_dir();
+            let b_dir = b.path().is_dir();
+            b_dir.cmp(&a_dir).then(a.file_name().cmp(&b.file_name()))
+        });
+        let mut out = format!("{}/\n\n", dir_path);
+        for entry in entries {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let p = entry.path();
+            if p.is_dir() {
+                out.push_str(&format!("  DIR  {}/\n", name));
+            } else if let Ok(meta) = entry.metadata() {
+                let sz = meta.len();
+                let sz_str = if sz > 1024 * 1024 { format!("{:.1}MB", sz as f64 / 1024.0 / 1024.0) }
+                    else if sz > 1024 { format!("{:.1}KB", sz as f64 / 1024.0) }
+                    else { format!("{}B", sz) };
+                out.push_str(&format!("  FILE {} ({})\n", name, sz_str));
+            }
+        }
+        out
+    }
+}
+
+fn handle_code_stats(params: &Value) -> String {
+    let empty = json!({});
+    let args = params.get("arguments").unwrap_or(&empty);
+    let dir_path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    if dir_path.is_empty() { return "path required".to_string(); }
+    if !Path::new(dir_path).exists() { return format!("Not found: {}", dir_path); }
+
+    let mut ext_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut ext_lines: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut total_lines: u64 = 0;
+    let mut total_size: u64 = 0;
+    let mut file_count = 0;
+
+    fn walk(p: &Path, ec: &mut std::collections::HashMap<String, usize>, el: &mut std::collections::HashMap<String, u64>, tl: &mut u64, ts: &mut u64, fc: &mut usize) {
+        if *fc >= 5000 { return; }
+        if let Ok(entries) = fs::read_dir(p) {
+            for entry in entries.flatten() {
+                if *fc >= 5000 { return; }
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name == ".git" || name == "node_modules" || name == "target" || name == "dist" { continue; }
+                let path = entry.path();
+                if path.is_dir() { walk(&path, ec, el, tl, ts, fc); continue; }
+                *fc += 1;
+                let ext = path.extension().and_then(|e| e.to_str()).map(|s| format!(".{}", s)).unwrap_or_else(|| "".to_string());
+                *ec.entry(ext.clone()).or_insert(0) += 1;
+                if let Ok(meta) = entry.metadata() {
+                    *ts += meta.len();
+                    if meta.len() < 512 * 1024 {
+                        if let Ok(content) = fs::read_to_string(&path) {
+                            let n = content.lines().count() as u64;
+                            *el.entry(ext).or_insert(0) += n;
+                            *tl += n;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    walk(Path::new(dir_path), &mut ext_counts, &mut ext_lines, &mut total_lines, &mut total_size, &mut file_count);
+
+    let lang_map: std::collections::HashMap<&str, &str> = [
+        (".js","JavaScript"),(".ts","TypeScript"),(".py","Python"),(".go","Go"),(".rs","Rust"),
+        (".zig","Zig"),(".swift","Swift"),(".c","C"),(".cpp","C++"),(".h","C/C++ Header"),
+        (".java","Java"),(".rb","Ruby"),(".md","Markdown"),(".json","JSON"),(".yaml","YAML"),
+        (".yml","YAML"),(".toml","TOML"),(".html","HTML"),(".css","CSS"),(".sh","Shell"),
+    ].iter().copied().collect();
+
+    let mut out = format!("Code Stats [Rust]: {}\n{}\n\n", dir_path, "=".repeat(50));
+    out.push_str(&format!("Total: {} files, {} lines, {:.1}MB\n\nLanguage Breakdown:\n", file_count, total_lines, total_size as f64 / 1024.0 / 1024.0));
+
+    let mut sorted: Vec<(&String, &u64)> = ext_lines.iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(a.1));
+    for (ext, lines) in sorted {
+        let lang = lang_map.get(ext.as_str()).copied().unwrap_or(ext.as_str());
+        let count = ext_counts.get(ext).copied().unwrap_or(0);
+        let pct = if total_lines > 0 { *lines as f64 * 100.0 / total_lines as f64 } else { 0.0 };
+        out.push_str(&format!("  {:<20} {:>8} lines  {:>4} files  {:.1}%\n", lang, lines, count, pct));
+    }
+    out
+}
+
 fn handle_tool_call(id: &Value, params: &Value) -> Value {
     let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("grep_search");
 
     if tool_name == "openapi_search" {
         let result = handle_openapi_search(params);
-        return json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": { "content": [{ "type": "text", "text": result }] }
-        });
+        return json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": result }] } });
+    }
+    if tool_name == "read_file" {
+        let result = handle_read_file(params);
+        return json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": result }] } });
+    }
+    if tool_name == "list_files" {
+        let result = handle_list_files(params);
+        return json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": result }] } });
+    }
+    if tool_name == "code_stats" {
+        let result = handle_code_stats(params);
+        return json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": result }] } });
     }
 
     // Default: grep_search
