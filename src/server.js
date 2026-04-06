@@ -5,6 +5,7 @@ import { createInterface } from 'readline';
 import { resolve } from 'path';
 import { homedir } from 'os';
 import { existsSync, mkdirSync } from 'fs';
+import { ALL_TOOLS, executeTool } from './tools.js';
 
 const app = express();
 app.use(cors());
@@ -224,7 +225,7 @@ async function chatWithRetry(messages, model, maxRetries = 3) {
       const resp = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ model: bodyModel, messages, tools: [GREP_TOOL, CLONE_TOOL], tool_choice: 'auto' }),
+        body: JSON.stringify({ model: bodyModel, messages, tools: [GREP_TOOL, CLONE_TOOL, ...ALL_TOOLS], tool_choice: 'auto' }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -257,18 +258,36 @@ app.post('/api/chat/stream', async (req, res) => {
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
   let conversationHistory = [
-    { role: 'system', content: `You are Milli-Agent, an expert code search and analysis agent. You have two tools:
-1. clone_repo — clone a GitHub repo to search it locally
-2. grep_search — search files using ripgrep (regex patterns)
+    { role: 'system', content: `You are Milli-Agent, an expert code intelligence agent. You have these tools:
 
-When analyzing search results:
-- Focus on actual source code, not docs/README examples
-- Be specific: name files, line numbers, what the code does
-- Highlight bugs, security issues, or tech debt first
-- Give actionable insights developers can act on
-- Use bullet points, be direct and concise
-- If asked to clone a repo, clone it first then search it
-- Use targeted regex patterns — don't just search for single words, use patterns like "func\\s+\\w+", "class\\s+\\w+", "if err != nil" etc.` }
+SEARCH & NAVIGATE:
+- clone_repo — clone a GitHub repo by URL or owner/repo
+- grep_search — regex search files via ripgrep (millisecond speed)
+- read_file — read file contents with line range
+- list_files — list directory contents, optionally recursive
+- find_references — find all usages of a symbol
+
+GIT:
+- git_log — commit history
+- git_diff — diff between commits/branches
+
+ANALYSIS:
+- code_stats — lines of code, languages, file counts
+- dependency_graph — parse package.json/go.mod/Cargo.toml/requirements.txt
+- security_scan — find hardcoded secrets, injection risks, insecure patterns
+- compare_repos — structural diff between two repos
+
+DEEP UNDERSTANDING:
+- repo_summary — comprehensive repo overview (README + structure + deps + stats)
+- knowledge_graph — build module map: imports, exports, definitions, relationships
+
+STRATEGY:
+1. For new repos: clone_repo → repo_summary or knowledge_graph for overview
+2. For specific questions: grep_search → read_file to examine matches
+3. For architecture: knowledge_graph depth=3 for deep analysis
+4. For security: security_scan then read_file on flagged files
+5. Be specific: name files, line numbers. Use targeted regex patterns.
+6. Chain tools: search → read → analyze. Don't stop at search results.` }
   ];
   try { if (history) { const h = Array.isArray(history) ? history : JSON.parse(history); conversationHistory.push(...h); } } catch {}
   conversationHistory.push({ role: 'user', content: message });
@@ -307,37 +326,45 @@ When analyzing search results:
           send('tool_call', { id: tc.id, name: tc.function.name, args, impl, round });
 
           try {
+            const toolStart = performance.now();
+            let content;
+
             if (tc.function.name === 'clone_repo') {
-              // Handle clone_repo tool
               const repoInput = args.repo || '';
               send('tool_result', { id: tc.id, impl: 'git', elapsed: 0, bytes: 0, matchCount: 0, preview: [`Cloning ${repoInput}...`] });
-
               const localPath = cloneOrGetRepo(repoInput);
-              const content = localPath
+              content = localPath
                 ? `Repository cloned successfully to: ${localPath}\nYou can now search it with grep_search using path="${localPath}"`
-                : `Failed to clone repository: ${repoInput}. Make sure the URL or slug is correct.`;
-
+                : `Failed to clone repository: ${repoInput}`;
               totalToolCalls++;
-              send('tool_result', { id: tc.id, impl: 'git', elapsed: 0, bytes: content.length, matchCount: localPath ? 1 : 0, preview: [content] });
-              conversationHistory.push({ role: 'tool', tool_call_id: tc.id, content });
-            } else {
-              // Handle grep_search tool
+              send('tool_result', { id: tc.id, impl: 'git', elapsed: Math.round(performance.now() - toolStart), bytes: content.length, matchCount: localPath ? 1 : 0, preview: [content.slice(0, 200)] });
+
+            } else if (tc.function.name === 'grep_search') {
               const server = await getServer(impl);
               const result = await server.search(args);
               totalToolCalls++;
               totalMcpMs += result.elapsed;
-
-              const truncated = result.text.length > 4000 ? result.text.slice(0, 4000) + '\n...(truncated)' : result.text;
+              content = result.text.length > 4000 ? result.text.slice(0, 4000) + '\n...(truncated)' : result.text;
               const matchLines = result.text.split('\n').filter(l => l.trim()).slice(0, 30);
+              send('tool_result', { id: tc.id, impl, elapsed: result.elapsed, bytes: result.bytes, matchCount: matchLines.length, preview: matchLines.slice(0, 15) });
 
-              send('tool_result', {
-                id: tc.id, impl,
-                elapsed: result.elapsed, bytes: result.bytes,
-                matchCount: matchLines.length, preview: matchLines.slice(0, 15),
-              });
-
-              conversationHistory.push({ role: 'tool', tool_call_id: tc.id, content: truncated });
+            } else {
+              // All other tools (Tier 1-4)
+              const result = executeTool(tc.function.name, args);
+              if (result !== null) {
+                totalToolCalls++;
+                const elapsed = Math.round(performance.now() - toolStart);
+                content = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+                if (content.length > 6000) content = content.slice(0, 6000) + '\n...(truncated)';
+                const lines = content.split('\n').filter(l => l.trim()).slice(0, 30);
+                send('tool_result', { id: tc.id, impl: 'system', elapsed, bytes: content.length, matchCount: lines.length, preview: lines.slice(0, 15) });
+              } else {
+                content = `Unknown tool: ${tc.function.name}`;
+                send('tool_error', { id: tc.id, error: content });
+              }
             }
+
+            conversationHistory.push({ role: 'tool', tool_call_id: tc.id, content });
           } catch (err) {
             send('tool_error', { id: tc.id, error: err.message });
             conversationHistory.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${err.message}` });
