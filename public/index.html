@@ -1124,8 +1124,8 @@ async function runAnalysis() {
             if (evt === 'text_delta') {
               text += d.content;
               searchState.analysis = text;
-              const el = document.getElementById('search-analysis');
-              if (el) el.lastChild.textContent = text;
+              const _el2 = document.getElementById('search-analysis');
+              if (_el2) _el2.lastChild.textContent = text;
               else { const a2 = document.getElementById('search-results'); if (a2) renderSearchResults(a2); }
             }
             if (evt === 'text_done') { searchState.analysis = d.content; if(d.cost) state.sessionCost += d.cost; refreshNav(); }
@@ -1608,8 +1608,8 @@ async function runAPISearch() {
     apiState.results = { text: 'Error: ' + e.message, elapsed: 0, bytes: 0 };
   }
   apiState.searching = false;
-  const el = document.getElementById('api-results');
-  if (el) renderAPIResults(el);
+  const _el3 = document.getElementById('api-results');
+  if (_el3) renderAPIResults(_el3);
 }
 
 async function runAPIRace() {
@@ -1629,8 +1629,8 @@ async function runAPIRace() {
     apiState.raceResults = { node: { text: 'Error: ' + e.message, elapsed: 0, bytes: 0 } };
   }
   apiState.racing = false;
-  const el = document.getElementById('api-results');
-  if (el) renderAPIRaceResults(el);
+  const _el4 = document.getElementById('api-results');
+  if (_el4) renderAPIRaceResults(_el4);
 }
 
 // ═══ Warp Speed Animation (CSS) ═══
@@ -1668,9 +1668,9 @@ function buildWarpCSS(container, statusText, subText) {
 }
 
 function updateWarpStatus(text, sub) {
-  const el = document.getElementById('warp-status');
+  const _el5 = document.getElementById('warp-status');
   const subEl = document.getElementById('warp-sub');
-  if (el) el.textContent = text;
+  if (_el5) _el5.textContent = text;
   if (subEl) subEl.textContent = sub || '';
 }
 
@@ -1788,10 +1788,10 @@ async function runWhiteHatAudit() {
   currentTab = null; render();
 
   // Show warp animation
-  const el = document.getElementById('wh-results');
-  if (el) {
-    el.innerHTML = '';
-    el.appendChild(buildWarpAnimation('Initializing', 'Preparing security scan pipeline...'));
+  const _el6 = document.getElementById('wh-results');
+  if (_el6) {
+    _el6.innerHTML = '';
+    _el6.appendChild(buildWarpAnimation('Initializing', 'Preparing security scan pipeline...'));
   }
 
   // Parse repo
@@ -1839,14 +1839,14 @@ async function runWhiteHatAudit() {
               const doneSteps = whState.steps.filter(s => s.status === 'done' || s.status === 'error');
               if (doneSteps.length >= 1) {
                 stopWarp();
-                const el = document.getElementById('wh-results');
-                if (el) renderWhiteHatResults(el);
+                const whEl1 = document.getElementById('wh-results');
+                if (whEl1) renderWhiteHatResults(whEl1);
               }
             }
             if (evt === 'complete') {
               whState.complete = d;
-              const el = document.getElementById('wh-results');
-              if (el) renderWhiteHatResults(el);
+              const whEl2 = document.getElementById('wh-results');
+              if (whEl2) renderWhiteHatResults(whEl2);
             }
           } catch {}
           evt = null;
@@ -1859,8 +1859,8 @@ async function runWhiteHatAudit() {
   }
 
   whState.scanning = false;
-  const el = document.getElementById('wh-results');
-  if (el) renderWhiteHatResults(el);
+  const _el7 = document.getElementById('wh-results');
+  if (_el7) renderWhiteHatResults(_el7);
 }
 
 // ═══ HEAL TAB — Self-healing code ═══
@@ -1976,8 +1976,8 @@ async function runHeal() {
               const existing = healState.steps.find(s => s.phase === d.phase);
               if (existing) Object.assign(existing, d);
               else healState.steps.push(d);
-              const el = document.getElementById('heal-results');
-              if (el) { el.innerHTML = ''; healState.steps.forEach(renderHealStep.bind(null, el)); }
+              const _el8 = document.getElementById('heal-results');
+              if (_el8) { _el8.innerHTML = ''; healState.steps.forEach(renderHealStep.bind(null, _el8)); }
             }
           } catch {}
           evt = null;
