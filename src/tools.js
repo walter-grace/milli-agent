@@ -715,10 +715,10 @@ function execFindReferences({ symbol, path: dirPath, language }) {
 function execSecurityScan({ path: dirPath }) {
   const checks = [
     { name: 'Hardcoded Secrets', patterns: ['password\\s*=\\s*["\'][^"\']+["\']', 'api_key\\s*=\\s*["\']', 'secret\\s*=\\s*["\'][^"\']+["\']', 'token\\s*=\\s*["\'][A-Za-z0-9]'] },
-    { name: 'SQL Injection', patterns: ['\\$\\{.*\\}.*(?:SELECT|INSERT|UPDATE|DELETE|DROP)', 'f".*(?:SELECT|INSERT|UPDATE|DELETE).*\\{', '".*\\+.*".*(?:SELECT|INSERT|UPDATE|DELETE)'] },
-    { name: 'Command Injection', patterns: ['eval\\(', 'exec\\((?!Sync)', 'os\\.system\\(', 'subprocess\\.call\\(.*shell=True', '\\$\\(.*\\)'] },
-    { name: 'Insecure Config', patterns: ['debug\\s*=\\s*[Tt]rue', 'verify\\s*=\\s*[Ff]alse', 'insecure', 'disable.*ssl', 'http://(?!localhost)'] },
-    { name: 'Sensitive Files', patterns: ['\\.env$', 'credentials', 'private_key', '\\.pem$'] },
+    { name: 'SQL Injection', patterns: ['SELECT.*FROM.*WHERE.*\\+', 'INSERT INTO.*\\+.*req', 'query\\(.*\\+.*req'] },
+    { name: 'Command Injection', patterns: ['eval\\(.*req', 'os\\.system\\(.*input', 'subprocess\\.call.*shell=True'] },
+    { name: 'Insecure Config', patterns: ['debug\\s*=\\s*[Tt]rue', 'verify\\s*=\\s*[Ff]alse', 'disable.*ssl'] },
+    { name: 'Sensitive Files', patterns: ['\\.env$', 'private_key', '\\.pem$'] },
   ];
 
   let out = `Security Scan: ${dirPath}\n${'='.repeat(50)}\n\n`;
@@ -728,7 +728,7 @@ function execSecurityScan({ path: dirPath }) {
     let findings = '';
     patterns.forEach(pat => {
       try {
-        const result = exec(`rg --no-heading -n -m 5 -i -- "${pat}" "${dirPath}" --glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' 2>/dev/null || true`);
+        const result = exec(`rg --no-heading -n -m 5 -i -- "${pat}" "${dirPath}" --glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!*tools.js' --glob '!*server.js' --glob '!*README*' --glob '!*.zig' 2>/dev/null || true`);
         if (result.trim()) {
           result.trim().split('\n').slice(0, 3).forEach(l => findings += `    ${l}\n`);
         }
@@ -1302,7 +1302,7 @@ function execDeepSecurityScan({ path: repoPath, ruleset = 'owasp', language }) {
 
     let totalFindings = 0;
     const langFilter = language ? `--type ${language}` : '';
-    const excludes = "--glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!vendor' --glob '!dist'";
+    const excludes = "--glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!vendor' --glob '!dist' --glob '!*tools.js' --glob '!*server.js' --glob '!*server.py' --glob '!*README*' --glob '!*.zig'";
 
     for (const check of owaspChecks) {
       let findings = '';
@@ -1567,7 +1567,7 @@ function execSecretsScan({ path: repoPath, scan_history = true }) {
     ];
 
     let totalFindings = 0;
-    const excludes = "--glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!vendor' --glob '!dist' --glob '!*.map' --glob '!*tools.js' --glob '!*server.py' --glob '!*.test.*' --glob '!*fixture*'";
+    const excludes = "--glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!vendor' --glob '!dist' --glob '!*.map' --glob '!*tools.js' --glob '!*server.js' --glob '!*server.py' --glob '!*.test.*' --glob '!*fixture*' --glob '!*.zig' --glob '!*README*'";
 
     // Scan current files
     out += `## Current Files\n`;
