@@ -234,6 +234,32 @@ code,.mono { font-family:'JetBrains Mono',monospace; }
   100% { height:300px; opacity:0; }
 }
 
+/* Code viewer slide panel */
+.code-viewer {
+  position:fixed; top:0; right:-50%; width:50%; height:100vh; background:var(--bg);
+  border-left:1px solid var(--border); z-index:80; transition:right .3s ease;
+  display:flex; flex-direction:column; box-shadow:var(--shadow-lg);
+}
+.code-viewer.open { right:0; }
+.code-viewer-header {
+  display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid var(--border);
+  flex-shrink:0; background:var(--bg2);
+}
+.code-viewer-body {
+  flex:1; overflow-y:auto; font-family:'JetBrains Mono',monospace; font-size:12px; line-height:1.7;
+}
+.code-viewer-line {
+  display:flex; padding:0 16px; min-height:20px;
+}
+.code-viewer-line:hover { background:rgba(255,255,255,.02); }
+.code-viewer-line.highlight { background:rgba(139,92,246,.15); border-left:3px solid var(--purple); }
+.code-viewer-num { width:45px; text-align:right; padding-right:16px; color:var(--fg3); flex-shrink:0; user-select:none; }
+.code-viewer-text { white-space:pre; overflow-x:auto; color:var(--fg2); }
+.code-viewer-overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:79; backdrop-filter:blur(2px);
+  animation:fadeIn .2s;
+}
+
 /* Responsive: collapse sidebar on small screens */
 @media (max-width: 768px) {
   .sidebar { width:56px; }
@@ -343,6 +369,96 @@ function render() {
     else if (state.tab==='compare') updateCompareResults();
   }
   } catch(e) { console.error('Render error:', e); document.getElementById('app').innerHTML = '<div style="padding:40px;color:#fff">Render error: '+e.message+'</div>'; }
+}
+
+// Code viewer — sliding panel to view files
+async function openCodeViewer(filePath, lineNum) {
+  // Close existing
+  closeCodeViewer();
+
+  try {
+    const resp = await fetch('/api/search/direct', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ pattern: '', path: filePath, impl: 'python', max_results: 1 })
+    });
+    // Use read_file endpoint instead — we need the actual tool
+    const readResp = await fetch('/api/chat/stream', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        message: `Use read_file to show ${filePath} lines ${Math.max(1,lineNum-50)} to ${lineNum+50}`,
+        model: state.model, impl: state.impl, history: []
+      })
+    });
+    // Actually just fetch the file content directly via a simpler approach
+  } catch {}
+
+  // Simpler: use a dedicated endpoint or just read via tool
+  try {
+    const resp = await fetch('/api/file/read', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ path: filePath, start_line: 1, end_line: 500 })
+    });
+    const data = await resp.json();
+    showCodePanel(filePath, data.content || data.text || '', parseInt(lineNum) || 0);
+  } catch (e) {
+    showToast('Could not read file: ' + e.message, 'error');
+  }
+}
+
+function showCodePanel(filePath, content, highlightLine) {
+  const overlay = h('div',{className:'code-viewer-overlay',onClick:closeCodeViewer});
+  document.body.appendChild(overlay);
+
+  const panel = h('div',{className:'code-viewer',id:'code-viewer-panel'});
+
+  // Header
+  const header = h('div',{className:'code-viewer-header'});
+  const fileName = filePath.split('/').pop();
+  const dirPath = filePath.split('/').slice(-3,-1).join('/');
+  header.appendChild(h('span',{style:{fontSize:'13px',fontWeight:600,color:'var(--fg)'}},fileName));
+  header.appendChild(h('span',{style:{fontSize:'11px',color:'var(--fg3)'}},dirPath));
+  header.appendChild(h('span',{style:{flex:1}}));
+  if (highlightLine) header.appendChild(h('span',{style:{fontSize:'11px',fontFamily:'monospace',color:'var(--purple)'}},'L'+highlightLine));
+  const closeBtn = h('button',{style:{width:'28px',height:'28px',borderRadius:'6px',border:'1px solid var(--border)',background:'transparent',color:'var(--fg3)',cursor:'pointer',fontSize:'14px',display:'flex',alignItems:'center',justifyContent:'center'},onClick:closeCodeViewer});
+  closeBtn.textContent = '✕';
+  header.appendChild(closeBtn);
+  panel.appendChild(header);
+
+  // Body — code lines
+  const body = h('div',{className:'code-viewer-body'});
+  const lines = content.split('\n');
+  lines.forEach((text, i) => {
+    const lineNo = i + 1;
+    const isHighlight = lineNo === highlightLine;
+    const row = h('div',{className:'code-viewer-line'+(isHighlight?' highlight':'')});
+    row.appendChild(h('span',{className:'code-viewer-num'},String(lineNo)));
+    row.appendChild(h('span',{className:'code-viewer-text'},text));
+    body.appendChild(row);
+  });
+  panel.appendChild(body);
+  document.body.appendChild(panel);
+
+  // Slide open
+  requestAnimationFrame(() => panel.classList.add('open'));
+
+  // Scroll to highlighted line
+  if (highlightLine > 0) {
+    setTimeout(() => {
+      const highlighted = body.querySelector('.highlight');
+      if (highlighted) highlighted.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, 350);
+  }
+
+  // Escape to close
+  document.addEventListener('keydown', function escHandler(e) {
+    if (e.key === 'Escape') { closeCodeViewer(); document.removeEventListener('keydown', escHandler); }
+  });
+}
+
+function closeCodeViewer() {
+  const panel = document.getElementById('code-viewer-panel');
+  if (panel) { panel.classList.remove('open'); setTimeout(() => panel.remove(), 300); }
+  document.querySelectorAll('.code-viewer-overlay').forEach(el => el.remove());
 }
 
 // Toast notifications
@@ -1051,18 +1167,20 @@ function renderSearchResults(container) {
     container.appendChild(analysisDiv);
   }
 
-  // Code results
+  // Code results — clickable rows open file viewer
   const code = h('div',{style:{fontSize:'12px',fontFamily:'monospace'}});
   r.lines.forEach((line, i) => {
     const p = line.split(':');
-    const file = (p[0]||'').split('/').pop()||'';
+    const fullPath = p[0]||'';
+    const file = fullPath.split('/').pop()||'';
     const num = p[1]||'';
     const content = p.slice(2).join(':');
-    const row = h('div',{style:{display:'flex',padding:'2px 24px',borderBottom:'1px solid rgba(255,255,255,0.02)',transition:'background 0.1s'}});
-    row.addEventListener('mouseenter',()=>row.style.background='rgba(255,255,255,0.03)');
-    row.addEventListener('mouseleave',()=>row.style.background='');
+    const row = h('div',{style:{display:'flex',padding:'2px 24px',borderBottom:'1px solid rgba(255,255,255,0.02)',transition:'background 0.1s',cursor:'pointer'},
+      onClick:()=>openCodeViewer(fullPath, parseInt(num)||1)});
+    row.addEventListener('mouseenter',()=>{row.style.background='rgba(139,92,246,0.06)';});
+    row.addEventListener('mouseleave',()=>{row.style.background='';});
     row.appendChild(h('span',{style:{color:'var(--fg3)',width:'30px',textAlign:'right',marginRight:'12px',flexShrink:0,fontSize:'10px',paddingTop:'2px'}},String(i+1)));
-    row.appendChild(h('span',{style:{color:'var(--purple)',width:'130px',flexShrink:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},file));
+    row.appendChild(h('span',{style:{color:'var(--purple)',width:'130px',flexShrink:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textDecoration:'underline',textDecorationColor:'rgba(139,92,246,0.3)'}},file));
     row.appendChild(h('span',{style:{color:'var(--fg3)',width:'45px',textAlign:'right',marginRight:'10px',flexShrink:0}},num));
     row.appendChild(h('span',{style:{color:'var(--fg)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},content));
     code.appendChild(row);

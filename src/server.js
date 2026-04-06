@@ -867,6 +867,14 @@ app.post('/api/security/audit', async (req, res) => {
   res.end();
 });
 
+// File read endpoint for code viewer
+app.post('/api/file/read', (req, res) => {
+  const { path: filePath, start_line = 1, end_line = 500 } = req.body;
+  if (!filePath) return res.status(400).json({ error: 'path required' });
+  const result = executeTool('read_file', { path: filePath, start_line, end_line });
+  res.json({ content: result });
+});
+
 app.get('/api/models', (_, res) => res.json(MODELS));
 app.get('/api/costs', async (_, res) => {
   // Get live account usage from OpenRouter
