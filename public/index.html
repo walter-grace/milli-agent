@@ -102,7 +102,7 @@ code,.mono { font-family:'JetBrains Mono',monospace; }
 <body>
 <div id="app"></div>
 <script type="module">
-const IMPLS = {cpp:{name:'C++',color:'#00a0e4',icon:'⚡'},rust:{name:'Rust',color:'#f74c00',icon:'🦀'},swift:{name:'Swift',color:'#f05138',icon:'🐦'},python:{name:'Python',color:'#ffd43b',icon:'🐍'}};
+const IMPLS = {cpp:{name:'C++',color:'#00a0e4',icon:'⚡'},rust:{name:'Rust',color:'#f74c00',icon:'🦀'},zig:{name:'Zig',color:'#f7a41d',icon:'⚙'},swift:{name:'Swift',color:'#f05138',icon:'🐦'},python:{name:'Python',color:'#ffd43b',icon:'🐍'}};
 const fmt = ms => ms<1000?Math.round(ms)+'ms':(ms/1000).toFixed(1)+'s';
 const h = (tag, props, ...kids) => { const el=document.createElement(tag); if(props) Object.entries(props).forEach(([k,v])=>{ if(k==='style'&&typeof v==='object') Object.assign(el.style,v); else if(k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(),v); else if(k==='className') el.className=v; else if(k==='innerHTML') el.innerHTML=v; else el.setAttribute(k,v); }); kids.flat(9).forEach(c=>{ if(c==null)return; el.appendChild(typeof c==='string'?document.createTextNode(c):c); }); return el; };
 

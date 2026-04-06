@@ -45,6 +45,10 @@ const IMPL_CONFIGS = {
     cmd: 'python3',
     args: [existsSync(resolve(MCP, 'python/server.py')) ? resolve(MCP, 'python/server.py') : resolve(BASE, 'python-mcp/server.py')]
   },
+  zig: {
+    cmd: existsSync(resolve(MCP, 'zig/zig-out/bin/mcp-grep-zig')) ? resolve(MCP, 'zig/zig-out/bin/mcp-grep-zig') : resolve(BASE, 'zig-mcp/mcp-grep-zig'),
+    args: []
+  },
 };
 
 const MODELS = [
@@ -52,7 +56,12 @@ const MODELS = [
   { id: 'arcee-ai/trinity-large-preview:free', name: 'Trinity Large', free: true, inputPrice: 0, outputPrice: 0 },
   { id: 'openai/gpt-oss-safeguard-20b', name: 'GPT-OSS 20B', free: false, inputPrice: 0.075, outputPrice: 0.30 },
   { id: 'moonshotai/kimi-k2.5', name: 'Kimi K2.5', free: false, inputPrice: 0.20, outputPrice: 0.60 },
+  { id: 'local', name: 'Local LLM', free: true, inputPrice: 0, outputPrice: 0, local: true },
 ];
+
+// Local LLM config — supports llama.cpp server, Ollama, LM Studio, or any OpenAI-compatible endpoint
+const LOCAL_LLM_URL = process.env.LOCAL_LLM_URL || 'http://localhost:8080/v1/chat/completions';
+const LOCAL_LLM_MODEL = process.env.LOCAL_LLM_MODEL || 'local';
 
 // Pricing in $/MTok — lookup by model id
 const MODEL_PRICING = {};
@@ -191,15 +200,25 @@ const CLONE_TOOL = {
 };
 
 async function chatWithRetry(messages, model, maxRetries = 3) {
+  const isLocal = model === 'local' || model.startsWith('local/');
   const apiKey = process.env.OPENROUTER_API_KEY;
+
+  // Pick endpoint + headers based on local vs cloud
+  const url = isLocal ? LOCAL_LLM_URL : 'https://openrouter.ai/api/v1/chat/completions';
+  const headers = isLocal
+    ? { 'Content-Type': 'application/json' }
+    : { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' };
+  const bodyModel = isLocal ? LOCAL_LLM_MODEL : model;
+
   for (let i = 0; i < maxRetries; i++) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 45000); // 45s timeout
+    const timeoutMs = isLocal ? 120000 : 45000; // local models get 2min
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      const resp = await fetch(url, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages, tools: [GREP_TOOL, CLONE_TOOL], tool_choice: 'auto' }),
+        headers,
+        body: JSON.stringify({ model: bodyModel, messages, tools: [GREP_TOOL, CLONE_TOOL], tool_choice: 'auto' }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
