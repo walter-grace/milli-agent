@@ -148,9 +148,9 @@ func openapiSearch(args: [String: Any]) -> String {
     let mode = args["mode"] as? String ?? "search"
     let methodFilter = args["method"] as? String ?? ""
 
-    let t0 = CFAbsoluteTimeGetCurrent()
+    let t0 = Date().timeIntervalSinceReferenceDate
     let specs = findSpecFiles(dir: dir)
-    let findMs = Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)
+    let findMs = Int((Date().timeIntervalSinceReferenceDate - t0) * 1000)
 
     if specs.isEmpty {
         return "No OpenAPI/Swagger specs found in \(dir) (scanned in \(findMs)ms)"
@@ -159,11 +159,11 @@ func openapiSearch(args: [String: Any]) -> String {
     var out = "OpenAPI Search [Swift]: \(dir)\n\(String(repeating: "=", count: 50))\nFound \(specs.count) spec(s) in \(findMs)ms\n\n"
 
     for specFile in specs.prefix(5) {
-        let tParse = CFAbsoluteTimeGetCurrent()
+        let tParse = Date().timeIntervalSinceReferenceDate
         guard let data = FileManager.default.contents(atPath: specFile) else { continue }
 
         let (paths, schemas, title, version) = parseOpenAPI(content: data)
-        let parseMs = Int((CFAbsoluteTimeGetCurrent() - tParse) * 1000)
+        let parseMs = Int((Date().timeIntervalSinceReferenceDate - tParse) * 1000)
 
         let displayTitle = title.isEmpty ? specFile : title
         out += "## \(displayTitle) (\(version))\nFile: \(specFile) | \(paths.count) endpoints, \(schemas.count) schemas | parsed \(parseMs)ms\n\n"
@@ -232,7 +232,7 @@ func openapiSearch(args: [String: Any]) -> String {
         }
     }
 
-    let totalMs = Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)
+    let totalMs = Int((Date().timeIntervalSinceReferenceDate - t0) * 1000)
     out += "Total: \(totalMs)ms\n"
     return out
 }
