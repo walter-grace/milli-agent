@@ -106,7 +106,7 @@ const IMPLS = {cpp:{name:'C++',color:'#00a0e4',icon:'⚡'},rust:{name:'Rust',col
 const fmt = ms => ms<1000?Math.round(ms)+'ms':(ms/1000).toFixed(1)+'s';
 const h = (tag, props, ...kids) => { const el=document.createElement(tag); if(props) Object.entries(props).forEach(([k,v])=>{ if(k==='style'&&typeof v==='object') Object.assign(el.style,v); else if(k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(),v); else if(k==='className') el.className=v; else if(k==='innerHTML') el.innerHTML=v; else el.setAttribute(k,v); }); kids.flat(9).forEach(c=>{ if(c==null)return; el.appendChild(typeof c==='string'?document.createTextNode(c):c); }); return el; };
 
-let state = { tab:'search', model:'google/gemma-4-26b-a4b-it', impl:'cpp', models:[], ready:0, msgs:[], input:'', sending:false, racePattern:'', racePath:'/Users/bigneek/mcp-grep-bench/test-corpus/large', raceResults:{}, raceWinner:null, racing:false, sessionCost:0, accountCost:0 };
+let state = { tab:'search', model:'google/gemma-4-26b-a4b-it', impl:'cpp', models:[], ready:0, msgs:[], input:'', sending:false, racePattern:'', racePath:'https://github.com/walter-grace/milli-agent', raceResults:{}, raceWinner:null, racing:false, sessionCost:0, accountCost:0 };
 let currentTab = null;
 let chatInput = null; // persistent textarea ref
 let raceInput = null; // persistent race input ref
@@ -210,7 +210,7 @@ function buildMsgList() {
       h('p',{style:{fontSize:'14px',color:'var(--fg3)',textAlign:'center',maxWidth:'400px',lineHeight:1.5}},'Millisecond code search. Paste a GitHub URL and I\'ll clone and search it.'),
     );
     const grid = h('div',{className:'sugg-grid'});
-    ['Find all TODO comments in the small codebase','Search for error handling patterns in Go files','Clone https://github.com/siddharthvaddem/openscreen and search for all functions','Search the large codebase for validation functions'].forEach(s => {
+    ['Clone https://github.com/walter-grace/milli-agent and find all TODO comments','Clone https://github.com/sipeed/picoclaw and search for tool definitions','Clone https://github.com/siddharthvaddem/openscreen and find all functions','Clone https://github.com/exo-explore/exo and search for error handling'].forEach(s => {
       grid.appendChild(h('button',{className:'sugg',onClick:()=>{chatInput.value=s; state.input=s; updateSendBtn();}},s));
     });
     empty.appendChild(grid);
@@ -549,7 +549,7 @@ async function sendChat() {
 // ═══ SEARCH TAB — instant results, optional AI analysis ═══
 let searchInput = null;
 let searchPathInput = null;
-let searchState = { pattern:'', path:'/Users/bigneek/mcp-grep-bench/test-corpus/large', repoUrl:'', results:null, analyzing:false, analysis:'', impl:'cpp' };
+let searchState = { pattern:'', path:'', repoUrl:'https://github.com/walter-grace/milli-agent', results:null, analyzing:false, analysis:'', impl:'cpp' };
 
 function renderSearch() {
   const main = h('div',{style:{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden'}});
@@ -784,9 +784,9 @@ function renderCompare() {
   const chips = h('div',{style:{display:'flex',flexWrap:'wrap',gap:'6px'}});
   [
     ['Clone picoclaw, find tools','Clone https://github.com/sipeed/picoclaw and find all tool definitions'],
-    ['Clone openscreen, find funcs','Clone https://github.com/siddharthvaddem/openscreen and search for all function definitions'],
-    ['TODOs in large codebase','Find all TODO comments in the large codebase'],
-    ['Error patterns in Go','Search the large codebase for error handling patterns'],
+    ['Clone milli-agent, find TODOs','Clone https://github.com/walter-grace/milli-agent and find all TODO comments'],
+    ['Clone picoclaw, find tools','Clone https://github.com/sipeed/picoclaw and search for all tool definitions'],
+    ['Clone exo, find errors','Clone https://github.com/exo-explore/exo and search for error handling'],
   ].forEach(([label,prompt]) => {
     chips.appendChild(h('button',{className:'pre',onClick:()=>{ cmpState.input=prompt; if(compareInput) compareInput.value=prompt; }},label));
   });
