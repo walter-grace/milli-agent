@@ -46,8 +46,9 @@ const IMPL_CONFIGS = {
     args: [existsSync(resolve(MCP, 'python/server.py')) ? resolve(MCP, 'python/server.py') : resolve(BASE, 'python-mcp/server.py')]
   },
   zig: {
-    cmd: existsSync(resolve(MCP, 'zig/zig-out/bin/mcp-grep-zig')) ? resolve(MCP, 'zig/zig-out/bin/mcp-grep-zig') : resolve(BASE, 'zig-mcp/mcp-grep-zig'),
-    args: []
+    cmd: existsSync(resolve(MCP, 'zig/zig-out/bin/mcp-grep-zig')) ? resolve(MCP, 'zig/zig-out/bin/mcp-grep-zig') : (existsSync(resolve(BASE, 'zig-mcp/mcp-grep-zig')) ? resolve(BASE, 'zig-mcp/mcp-grep-zig') : ''),
+    args: [],
+    disabled: process.platform === 'linux', // Zig MCP server has runtime issues on Linux
   },
 };
 
@@ -114,8 +115,9 @@ class MCPServer {
 const servers = {};
 async function getServer(name) {
   if (!IMPL_CONFIGS[name]) throw new Error(`Unknown server: ${name}`);
-  // Check if binary exists
+  if (IMPL_CONFIGS[name].disabled) throw new Error(`${name} server is not available on this platform`);
   const cmd = IMPL_CONFIGS[name].cmd;
+  if (!cmd) throw new Error(`${name} server binary path not configured`);
   if (cmd !== 'python3' && !existsSync(cmd)) throw new Error(`Server binary not found: ${cmd} (${name} may not be available on this platform)`);
   if (!servers[name] || !servers[name].ready) {
     servers[name] = new MCPServer(name, IMPL_CONFIGS[name]);
