@@ -52,7 +52,7 @@ fn handleToolCall(line: []const u8) ![]const u8 {
     var argv_buf: [20][]const u8 = undefined;
     var argc: usize = 0;
 
-    argv_buf[argc] = "/Users/bigneek/.cargo/bin/rg";
+    argv_buf[argc] = "rg";
     argc += 1;
     argv_buf[argc] = "--no-heading";
     argc += 1;

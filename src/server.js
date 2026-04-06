@@ -113,6 +113,10 @@ class MCPServer {
 
 const servers = {};
 async function getServer(name) {
+  if (!IMPL_CONFIGS[name]) throw new Error(`Unknown server: ${name}`);
+  // Check if binary exists
+  const cmd = IMPL_CONFIGS[name].cmd;
+  if (cmd !== 'python3' && !existsSync(cmd)) throw new Error(`Server binary not found: ${cmd} (${name} may not be available on this platform)`);
   if (!servers[name] || !servers[name].ready) {
     servers[name] = new MCPServer(name, IMPL_CONFIGS[name]);
     await servers[name].start();
