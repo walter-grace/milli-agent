@@ -2,3 +2,5 @@ node_modules/
 target/
 repos/
 *.log
+.zig-cache/
+zig-out/
