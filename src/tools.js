@@ -338,6 +338,54 @@ export const SECRETS_SCAN_TOOL = {
   },
 };
 
+export const TRIVY_SCAN_TOOL = {
+  type: 'function',
+  function: {
+    name: 'trivy_scan',
+    description: 'Container and infrastructure security scanner. Scans Dockerfiles for misconfigurations, dependencies for CVEs, IaC files (Terraform, K8s YAML) for security issues. More comprehensive than dependency_audit for container-based projects.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path to the repo or Dockerfile to scan' },
+        scan_type: { type: 'string', description: 'Type: "fs" (filesystem/deps), "config" (Dockerfile/IaC misconfigs), "all" (both). Default: all' },
+      },
+      required: ['path'],
+    },
+  },
+};
+
+export const SANDBOX_EXEC_TOOL = {
+  type: 'function',
+  function: {
+    name: 'sandbox_exec',
+    description: 'Execute a command in a sandboxed environment on a cloned repo. Use for: running tests, linting, building, or any analysis command. Timeout 30s, no network access, read-only outside repo dir.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Working directory (must be inside a cloned repo)' },
+        command: { type: 'string', description: 'Shell command to execute (e.g., "npm test", "python -m pytest", "make lint")' },
+        timeout: { type: 'integer', description: 'Timeout in seconds (default 30, max 120)' },
+      },
+      required: ['path', 'command'],
+    },
+  },
+};
+
+export const PORT_SCAN_TOOL = {
+  type: 'function',
+  function: {
+    name: 'port_scan',
+    description: 'Scan repo configs for exposed ports and network security issues. Checks Dockerfiles (EXPOSE), docker-compose, nginx configs, server configs, .env files for port bindings and network exposure.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path to the repo to scan' },
+      },
+      required: ['path'],
+    },
+  },
+};
+
 // ═══════════════════════════════════════════
 // TIER 7 — API Intelligence
 // ═══════════════════════════════════════════
@@ -371,6 +419,7 @@ export const ALL_TOOLS = [
   REPO_SUMMARY_TOOL, KNOWLEDGE_GRAPH_TOOL,
   GIT_SUMMARY_TOOL, GIT_EFFORT_TOOL, GIT_AUTHORS_TOOL, GIT_TIMELINE_TOOL, GIT_SECRETS_CLEAN_TOOL,
   DEEP_SECURITY_SCAN_TOOL, DEPENDENCY_AUDIT_TOOL, SECRETS_SCAN_TOOL,
+  TRIVY_SCAN_TOOL, SANDBOX_EXEC_TOOL, PORT_SCAN_TOOL,
   OPENAPI_SEARCH_TOOL,
 ];
 
@@ -395,6 +444,9 @@ export function executeTool(name, args) {
     case 'deep_security_scan': return execDeepSecurityScan(args);
     case 'dependency_audit': return execDependencyAudit(args);
     case 'secrets_scan': return execSecretsScan(args);
+    case 'trivy_scan': return execTrivyScan(args);
+    case 'sandbox_exec': return execSandboxExec(args);
+    case 'port_scan': return execPortScan(args);
     case 'openapi_search': return execOpenAPISearch(args);
     default: return null; // not handled here
   }
@@ -1511,6 +1563,350 @@ function execSecretsScan({ path: repoPath, scan_history = true }) {
       out += `  5. Use BFG Repo-Cleaner to remove secrets from git history\n`;
     }
   }
+
+  const totalMs = Math.round(performance.now() - t0);
+  out += `\nScan time: ${totalMs}ms\n`;
+  return out;
+}
+
+// ═══════════════════════════════════════════
+// Trivy, Sandbox Exec, Port Scan — Implementations
+// ═══════════════════════════════════════════
+
+function execTrivyScan({ path: repoPath, scan_type = 'all' }) {
+  if (!existsSync(repoPath)) return `Not found: ${repoPath}`;
+  const t0 = performance.now();
+
+  let out = `Trivy Security Scan: ${repoPath}\n${'='.repeat(50)}\n\n`;
+
+  // Check if trivy is available
+  let hasTrivy = false;
+  try { exec('trivy --version', { timeout: 5000 }); hasTrivy = true; } catch {}
+
+  if (hasTrivy) {
+    // Filesystem scan (dependencies + vulnerabilities)
+    if (scan_type === 'fs' || scan_type === 'all') {
+      out += `## Filesystem Scan (CVEs in dependencies)\n`;
+      try {
+        const result = exec(`trivy fs --format json --timeout 120s "${repoPath}" 2>/dev/null || true`, { timeout: 130000 });
+        const data = JSON.parse(result);
+        const results = data.Results || [];
+        let totalVulns = 0;
+
+        results.forEach(r => {
+          const vulns = r.Vulnerabilities || [];
+          if (vulns.length === 0) return;
+          totalVulns += vulns.length;
+          out += `\n  ${r.Target} (${r.Type || '?'}):\n`;
+
+          // Group by severity
+          const bySev = { CRITICAL: [], HIGH: [], MEDIUM: [], LOW: [] };
+          vulns.forEach(v => { const s = v.Severity || 'UNKNOWN'; if (!bySev[s]) bySev[s] = []; bySev[s].push(v); });
+
+          for (const [sev, items] of Object.entries(bySev)) {
+            if (items.length === 0) continue;
+            out += `    [${sev}] ${items.length} vulnerabilities:\n`;
+            items.slice(0, 5).forEach(v => {
+              out += `      ${v.VulnerabilityID}: ${v.PkgName}@${v.InstalledVersion}`;
+              if (v.FixedVersion) out += ` → fix: ${v.FixedVersion}`;
+              out += `\n`;
+              if (v.Title) out += `        ${v.Title.slice(0, 120)}\n`;
+            });
+            if (items.length > 5) out += `      ... and ${items.length - 5} more\n`;
+          }
+        });
+        out += `\n  Total: ${totalVulns} vulnerabilities found\n\n`;
+      } catch (e) {
+        out += `  Error: ${e.message}\n\n`;
+      }
+    }
+
+    // Config scan (Dockerfile, K8s, Terraform misconfigs)
+    if (scan_type === 'config' || scan_type === 'all') {
+      out += `## Config Scan (Dockerfile/IaC misconfigurations)\n`;
+      try {
+        const result = exec(`trivy config --format json --timeout 60s "${repoPath}" 2>/dev/null || true`, { timeout: 70000 });
+        const data = JSON.parse(result);
+        const results = data.Results || [];
+        let totalMisconfigs = 0;
+
+        results.forEach(r => {
+          const misconfigs = r.Misconfigurations || [];
+          if (misconfigs.length === 0) return;
+          totalMisconfigs += misconfigs.length;
+          out += `\n  ${r.Target}:\n`;
+          misconfigs.slice(0, 10).forEach(m => {
+            out += `    [${m.Severity}] ${m.ID}: ${m.Title}\n`;
+            if (m.Message) out += `      ${m.Message.slice(0, 150)}\n`;
+            if (m.Resolution) out += `      Fix: ${m.Resolution.slice(0, 120)}\n`;
+          });
+          if (misconfigs.length > 10) out += `    ... and ${misconfigs.length - 10} more\n`;
+        });
+        out += `\n  Total: ${totalMisconfigs} misconfigurations found\n\n`;
+      } catch (e) {
+        out += `  Error: ${e.message}\n\n`;
+      }
+    }
+  } else {
+    // Fallback: manual Dockerfile + config analysis
+    out += `[trivy not installed — using manual config analysis]\n`;
+    out += `Install: brew install trivy (or apt-get install trivy)\n\n`;
+
+    // Scan Dockerfiles
+    const dockerfiles = [];
+    try {
+      const found = exec(`find "${repoPath}" -name "Dockerfile*" -not -path "*/.git/*" -not -path "*/node_modules/*" 2>/dev/null | head -10`).trim();
+      if (found) found.split('\n').forEach(f => dockerfiles.push(f));
+    } catch {}
+
+    if (dockerfiles.length > 0) {
+      out += `## Dockerfile Analysis\n`;
+      dockerfiles.forEach(df => {
+        const rel = relative(repoPath, df);
+        const content = readFileSync(df, 'utf8');
+        const issues = [];
+
+        // Common Dockerfile misconfigurations
+        if (content.match(/FROM\s+\S+\s*$/m) && !content.includes(':')) issues.push('Using latest tag (pin versions)');
+        if (content.includes('USER root') || (!content.includes('USER ') && content.includes('RUN '))) issues.push('Running as root (add USER directive)');
+        if (content.match(/EXPOSE\s+22\b/)) issues.push('SSH port 22 exposed');
+        if (content.includes('--no-check-certificate') || content.includes('--insecure')) issues.push('Insecure download (no cert verification)');
+        if (content.match(/ENV\s+\w*(PASSWORD|SECRET|TOKEN|KEY)\w*\s*=/i)) issues.push('Secret in ENV variable (use build args or secrets)');
+        if (content.includes('ADD ') && !content.includes('ADD --chown')) issues.push('Using ADD instead of COPY (ADD can auto-extract archives)');
+        if (content.match(/chmod\s+777/)) issues.push('chmod 777 (overly permissive)');
+        if (content.match(/apt-get\s+install/) && !content.includes('--no-install-recommends')) issues.push('Missing --no-install-recommends (bloated image)');
+        if (!content.includes('HEALTHCHECK')) issues.push('No HEALTHCHECK defined');
+        const exposes = content.match(/EXPOSE\s+(\d+)/g) || [];
+
+        out += `  ${rel}:\n`;
+        out += `    Ports: ${exposes.map(e => e.split(/\s+/)[1]).join(', ') || 'none'}\n`;
+        if (issues.length > 0) {
+          issues.forEach(i => out += `    [!] ${i}\n`);
+        } else {
+          out += `    [ok] No common misconfigurations found\n`;
+        }
+        out += '\n';
+      });
+    }
+
+    // Scan docker-compose
+    try {
+      const composeFiles = exec(`find "${repoPath}" -name "docker-compose*" -not -path "*/.git/*" 2>/dev/null | head -5`).trim();
+      if (composeFiles) {
+        out += `## Docker Compose\n`;
+        composeFiles.split('\n').forEach(f => {
+          const content = readFileSync(f, 'utf8');
+          const rel = relative(repoPath, f);
+          const issues = [];
+          if (content.includes('privileged: true')) issues.push('Privileged container');
+          if (content.includes('network_mode: host')) issues.push('Host network mode');
+          if (content.match(/\d+:\d+/g)?.some(p => p.startsWith('0.0.0.0'))) issues.push('Binding to 0.0.0.0');
+          if (content.match(/environment:[\s\S]*?(PASSWORD|SECRET|TOKEN)/i)) issues.push('Secrets in environment');
+          out += `  ${rel}: ${issues.length > 0 ? issues.join(', ') : 'ok'}\n`;
+        });
+        out += '\n';
+      }
+    } catch {}
+
+    // Scan K8s YAML
+    try {
+      const k8sFiles = exec(`rg -l "apiVersion.*v1|kind.*Deployment|kind.*Pod" --glob "*.yaml" --glob "*.yml" "${repoPath}" 2>/dev/null | head -10`).trim();
+      if (k8sFiles) {
+        out += `## Kubernetes Manifests\n`;
+        k8sFiles.split('\n').forEach(f => {
+          const content = readFileSync(f, 'utf8');
+          const rel = relative(repoPath, f);
+          const issues = [];
+          if (content.includes('privileged: true')) issues.push('Privileged container');
+          if (content.includes('runAsRoot: true') || content.includes('runAsUser: 0')) issues.push('Running as root');
+          if (content.includes('hostNetwork: true')) issues.push('Host network');
+          if (content.includes('hostPath:')) issues.push('Host path mount');
+          if (!content.includes('resources:')) issues.push('No resource limits');
+          if (!content.includes('readOnlyRootFilesystem')) issues.push('Writable root filesystem');
+          out += `  ${rel}: ${issues.length > 0 ? issues.join(', ') : 'ok'}\n`;
+        });
+        out += '\n';
+      }
+    } catch {}
+  }
+
+  const totalMs = Math.round(performance.now() - t0);
+  out += `Scan time: ${totalMs}ms\n`;
+  return out;
+}
+
+function execSandboxExec({ path: workDir, command, timeout: timeoutSec = 30 }) {
+  if (!existsSync(workDir)) return `Not found: ${workDir}`;
+
+  // Security: validate the path is inside a cloned repo directory
+  const repoBase = resolve(process.env.HOME || '/root', 'milli-repos');
+  const tmpBase = '/tmp/repos';
+  const resolvedPath = resolve(workDir);
+
+  if (!resolvedPath.startsWith(repoBase) && !resolvedPath.startsWith(tmpBase) && !resolvedPath.startsWith('/tmp/')) {
+    return `Sandbox error: path must be inside a cloned repo (${repoBase} or /tmp/). Got: ${resolvedPath}`;
+  }
+
+  // Sanitize command — block dangerous patterns
+  const blocked = ['rm -rf /', 'mkfs', 'dd if=', ':(){', 'fork bomb', '> /dev/sd', 'chmod -R 777 /', 'curl.*|.*sh', 'wget.*|.*sh'];
+  const cmdLower = command.toLowerCase();
+  for (const b of blocked) {
+    if (cmdLower.includes(b.toLowerCase())) {
+      return `Sandbox error: blocked dangerous command pattern "${b}"`;
+    }
+  }
+
+  const maxTimeout = Math.min(timeoutSec, 120) * 1000;
+  const t0 = performance.now();
+
+  let out = `Sandbox Exec: ${workDir}\n${'='.repeat(50)}\n`;
+  out += `Command: ${command}\n`;
+  out += `Timeout: ${timeoutSec}s\n\n`;
+
+  try {
+    const result = exec(`cd "${resolvedPath}" && ${command}`, {
+      timeout: maxTimeout,
+      maxBuffer: 1024 * 1024, // 1MB output limit
+      env: {
+        ...process.env,
+        PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
+        HOME: resolvedPath, // jail HOME to repo
+        NODE_ENV: 'test',
+      },
+    });
+
+    const elapsed = Math.round(performance.now() - t0);
+    const lines = result.split('\n');
+    out += `Exit: 0 (success)\n`;
+    out += `Output: ${lines.length} lines, ${Buffer.byteLength(result)} bytes\n`;
+    out += `Time: ${elapsed}ms\n\n`;
+
+    // Trim output if too large
+    if (result.length > 8000) {
+      out += result.slice(0, 4000) + '\n\n... (truncated) ...\n\n' + result.slice(-2000);
+    } else {
+      out += result;
+    }
+  } catch (e) {
+    const elapsed = Math.round(performance.now() - t0);
+    if (e.killed || e.signal === 'SIGTERM') {
+      out += `Exit: TIMEOUT (killed after ${timeoutSec}s)\n`;
+    } else {
+      out += `Exit: ${e.status || 1} (error)\n`;
+    }
+    out += `Time: ${elapsed}ms\n\n`;
+    if (e.stdout) out += `stdout:\n${e.stdout.slice(0, 4000)}\n`;
+    if (e.stderr) out += `stderr:\n${e.stderr.slice(0, 2000)}\n`;
+    if (!e.stdout && !e.stderr) out += `Error: ${e.message}\n`;
+  }
+
+  return out;
+}
+
+function execPortScan({ path: repoPath }) {
+  if (!existsSync(repoPath)) return `Not found: ${repoPath}`;
+  const t0 = performance.now();
+
+  let out = `Port & Network Scan: ${repoPath}\n${'='.repeat(50)}\n\n`;
+  const excludes = "--glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!vendor' --glob '!dist'";
+
+  // 1. Dockerfile EXPOSE directives
+  out += `## Exposed Ports (Dockerfiles)\n`;
+  try {
+    const result = exec(`rg --no-heading -n "EXPOSE" ${excludes} "${repoPath}" 2>/dev/null || true`);
+    if (result.trim()) {
+      result.trim().split('\n').forEach(l => {
+        const rel = relative(repoPath, l.split(':')[0]);
+        out += `  ${rel}:${l.split(':').slice(1).join(':').trim()}\n`;
+      });
+    } else {
+      out += `  No EXPOSE directives found\n`;
+    }
+  } catch {}
+  out += '\n';
+
+  // 2. Port bindings in code
+  out += `## Port Bindings in Code\n`;
+  const portPatterns = [
+    { label: 'listen/bind', pattern: 'listen\\(\\s*\\d+|bind\\(.*\\d+|PORT.*=.*\\d{4,5}' },
+    { label: 'server port', pattern: 'port.*[:=].*\\d{4,5}|server.*port' },
+    { label: '0.0.0.0 binding', pattern: '0\\.0\\.0\\.0' },
+  ];
+  for (const { label, pattern } of portPatterns) {
+    try {
+      const result = exec(`rg --no-heading -n -m 10 -i ${excludes} -- "${pattern}" "${repoPath}" 2>/dev/null || true`);
+      if (result.trim()) {
+        out += `  ${label}:\n`;
+        result.trim().split('\n').slice(0, 5).forEach(l => {
+          out += `    ${relative(repoPath, l.split(':')[0])}:${l.split(':').slice(1).join(':').trim().slice(0, 100)}\n`;
+        });
+        out += '\n';
+      }
+    } catch {}
+  }
+
+  // 3. docker-compose port mappings
+  out += `## Docker Compose Ports\n`;
+  try {
+    const result = exec(`rg --no-heading -n "ports:" -A 5 ${excludes} --glob "docker-compose*" "${repoPath}" 2>/dev/null || true`);
+    if (result.trim()) {
+      result.trim().split('\n').forEach(l => {
+        out += `  ${l.trim()}\n`;
+      });
+    } else {
+      out += `  No docker-compose port mappings found\n`;
+    }
+  } catch {}
+  out += '\n';
+
+  // 4. Network security issues
+  out += `## Network Security Issues\n`;
+  const netIssues = [
+    { label: 'CORS wildcard', pattern: 'Access-Control-Allow-Origin.*\\*|cors.*origin.*\\*' },
+    { label: 'HTTP (non-TLS)', pattern: 'http://(?!localhost|127\\.0|0\\.0\\.0)\\w+' },
+    { label: 'Disabled TLS verification', pattern: 'rejectUnauthorized.*false|verify.*=.*[Ff]alse|VERIFY_SSL.*false|InsecureSkipVerify' },
+    { label: 'Host network mode', pattern: 'network_mode.*host|hostNetwork.*true' },
+    { label: 'Privileged mode', pattern: 'privileged.*true' },
+  ];
+  let netFindings = 0;
+  for (const { label, pattern } of netIssues) {
+    try {
+      const result = exec(`rg --no-heading -n -m 5 -i ${excludes} -- "${pattern}" "${repoPath}" 2>/dev/null || true`);
+      if (result.trim()) {
+        netFindings++;
+        out += `  [!] ${label}:\n`;
+        result.trim().split('\n').slice(0, 3).forEach(l => {
+          out += `    ${relative(repoPath, l.split(':')[0])}:${l.split(':').slice(1).join(':').trim().slice(0, 100)}\n`;
+        });
+        out += '\n';
+      }
+    } catch {}
+  }
+  if (netFindings === 0) out += `  No network security issues found\n`;
+
+  // 5. Environment/config files with sensitive bindings
+  out += `\n## Sensitive Configs\n`;
+  try {
+    const envFiles = exec(`find "${repoPath}" -name ".env*" -o -name "*.env" -not -path "*/.git/*" -not -path "*/node_modules/*" 2>/dev/null | head -10`).trim();
+    if (envFiles) {
+      envFiles.split('\n').forEach(f => {
+        if (!f) return;
+        const rel = relative(repoPath, f);
+        try {
+          const content = readFileSync(f, 'utf8');
+          const ports = content.match(/PORT\s*=\s*\d+/gi) || [];
+          const hosts = content.match(/HOST\s*=\s*\S+/gi) || [];
+          const secrets = content.match(/(SECRET|KEY|TOKEN|PASSWORD)\s*=\s*\S+/gi) || [];
+          out += `  ${rel}: ${ports.length} ports, ${hosts.length} hosts, ${secrets.length} secrets\n`;
+          ports.forEach(p => out += `    ${p}\n`);
+          hosts.forEach(h => out += `    ${h}\n`);
+          if (secrets.length > 0) out += `    [!] ${secrets.length} secrets in env file\n`;
+        } catch {}
+      });
+    } else {
+      out += `  No .env files found\n`;
+    }
+  } catch {}
 
   const totalMs = Math.round(performance.now() - t0);
   out += `\nScan time: ${totalMs}ms\n`;

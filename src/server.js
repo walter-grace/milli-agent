@@ -352,6 +352,9 @@ SECURITY (White-Hat):
 - deep_security_scan — OWASP Top 10 scan (AST-based with semgrep, or enhanced regex fallback). Finds injection, XSS, auth bypass, crypto failures, SSRF
 - dependency_audit — scan deps for known CVEs (npm audit, pip-audit, cargo audit, govulncheck)
 - secrets_scan — find leaked API keys, tokens, passwords in code + git history (gitleaks or entropy analysis)
+- trivy_scan — container/IaC security: Dockerfile misconfigs, K8s YAML issues, Terraform problems, dependency CVEs
+- port_scan — find exposed ports, network bindings, CORS wildcards, disabled TLS, privileged containers
+- sandbox_exec — run commands in sandboxed environment (tests, linting, builds) on cloned repos
 
 DEEP UNDERSTANDING:
 - repo_summary — comprehensive repo overview (README + structure + deps + stats)
