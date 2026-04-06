@@ -254,8 +254,21 @@ app.post('/api/chat/stream', async (req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-  let conversationHistory = [];
-  try { if (history) conversationHistory = Array.isArray(history) ? history : JSON.parse(history); } catch {}
+  let conversationHistory = [
+    { role: 'system', content: `You are Milli-Agent, an expert code search and analysis agent. You have two tools:
+1. clone_repo — clone a GitHub repo to search it locally
+2. grep_search — search files using ripgrep (regex patterns)
+
+When analyzing search results:
+- Focus on actual source code, not docs/README examples
+- Be specific: name files, line numbers, what the code does
+- Highlight bugs, security issues, or tech debt first
+- Give actionable insights developers can act on
+- Use bullet points, be direct and concise
+- If asked to clone a repo, clone it first then search it
+- Use targeted regex patterns — don't just search for single words, use patterns like "func\\s+\\w+", "class\\s+\\w+", "if err != nil" etc.` }
+  ];
+  try { if (history) { const h = Array.isArray(history) ? history : JSON.parse(history); conversationHistory.push(...h); } } catch {}
   conversationHistory.push({ role: 'user', content: message });
 
   console.log(`Chat: "${message.slice(0,60)}" model=${model} impl=${impl} history=${conversationHistory.length-1} msgs`);
@@ -452,12 +465,37 @@ app.post('/api/search/analyze', async (req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-  const prompt = question || `Analyze these search results for pattern "${pattern}" and provide a brief summary of what you found. Be concise.`;
-  const truncatedResults = (typeof results === 'string' ? results : results.join('\n')).slice(0, 4000);
+  const truncatedResults = (typeof results === 'string' ? results : results.join('\n')).slice(0, 6000);
+
+  // Count unique files and extract file types
+  const lines = typeof results === 'string' ? results.split('\n') : results;
+  const files = new Set(lines.map(l => l.split(':')[0]).filter(Boolean));
+  const fileCount = files.size;
+
+  const systemPrompt = `You are a senior code analyst. You analyze grep search results from codebases with precision.
+
+Rules:
+- Focus ONLY on actual source code findings, not documentation/README examples
+- Separate real code issues from test files and config
+- Be specific: name exact files, line numbers, and what the code does
+- If the pattern reveals bugs, security issues, or tech debt — highlight those first
+- Give actionable insights a developer can act on immediately
+- Use bullet points, be direct, no filler
+- If results are from multiple files with identical content, say so concisely`;
+
+  const userPrompt = question || `Pattern: "${pattern}"
+Found in ${fileCount} files, ${lines.length} total matches.
+
+Analyze these results. What are the most important findings? Group by:
+1. **Critical** — bugs, security issues, or broken patterns
+2. **Tech debt** — TODOs, FIXMEs, incomplete implementations
+3. **Patterns** — recurring code patterns, architectural decisions
+4. **Summary** — one-line takeaway`;
 
   try {
     const completion = await chatWithRetry([
-      { role: 'user', content: prompt + '\n\nSearch results:\n' + truncatedResults }
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt + '\n\n```\n' + truncatedResults + '\n```' }
     ], model);
 
     const content = completion.choices?.[0]?.message?.content || 'No analysis available.';
