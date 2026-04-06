@@ -110,8 +110,11 @@ class MCPServer {
     });
   }
   async search(args) {
+    return this.callTool('grep_search', args);
+  }
+  async callTool(name, args) {
     const start = performance.now();
-    const r = await this.send({ jsonrpc: '2.0', id: ++this.rid, method: 'tools/call', params: { name: 'grep_search', arguments: args } });
+    const r = await this.send({ jsonrpc: '2.0', id: ++this.rid, method: 'tools/call', params: { name, arguments: args } });
     const text = r?.result?.content?.[0]?.text || 'No results';
     return { text, elapsed: Math.round((performance.now() - start) * 100) / 100, bytes: Buffer.byteLength(text) };
   }
@@ -253,7 +256,7 @@ function applyCacheControl(messages, model) {
   });
 }
 
-async function chatWithRetry(messages, model, maxRetries = 3) {
+async function chatWithRetry(messages, model, maxRetries = 5) {
   const isLocal = model === 'local' || model.startsWith('local/');
   const apiKey = process.env.OPENROUTER_API_KEY;
 
@@ -269,19 +272,22 @@ async function chatWithRetry(messages, model, maxRetries = 3) {
 
   for (let i = 0; i < maxRetries; i++) {
     const controller = new AbortController();
-    const timeoutMs = isLocal ? 120000 : 45000; // local models get 2min
+    const timeoutMs = isLocal ? 120000 : 90000; // 90s for cloud, 2min for local
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const resp = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ model: bodyModel, messages: cachedMessages, tools: [GREP_TOOL, CLONE_TOOL, TOOL_SEARCH_TOOL, TOOL_RUN_TOOL], tool_choice: 'auto' }),
+        body: JSON.stringify({ model: bodyModel, messages: cachedMessages, tools: [GREP_TOOL, CLONE_TOOL, ...ALL_TOOLS], tool_choice: 'auto' }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
       if (resp.status === 429) {
-        console.log(`  [429 rate limited, retry ${i+1}]`);
-        await new Promise(r => setTimeout(r, 3000 * (i + 1)));
+        // Read Retry-After header if present
+        const retryAfter = parseInt(resp.headers.get('retry-after')) || 0;
+        const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(2000 * Math.pow(2, i), 30000); // exponential backoff capped at 30s
+        console.log(`  [429 rate limited, retry ${i+1}/${maxRetries} in ${waitMs}ms]`);
+        await new Promise(r => setTimeout(r, waitMs));
         continue;
       }
       if (!resp.ok) throw new Error(`API ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -323,25 +329,35 @@ async function chatWithRetry(messages, model, maxRetries = 3) {
 // Main chat endpoint - SSE streaming agent loop (supports both GET and POST)
 app.post('/api/chat/stream', async (req, res) => {
   const { message, model = 'google/gemma-4-26b-a4b-it', impl = 'cpp', history } = req.body;
+  // Note: Gemma is currently the most reliable. GPT-OSS hit Groq rate limits.
   if (!message) return res.status(400).json({ error: 'message required' });
 
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
   let conversationHistory = [
-    { role: 'system', content: `You are Milli-Agent, a code intelligence agent with 30 tools available via Code Mode.
+    { role: 'system', content: `You are Milli-Agent, a code intelligence agent. You have 30+ tools for code search, security review, git analysis, and self-healing.
 
-You have 4 tools:
-- clone_repo(repo) — clone a GitHub repo
-- grep_search(pattern, path, ...) — fast regex search via MCP server
-- tool_search(query) — find tools by keyword (e.g. "git", "security", "lsp")
-- tool_run(tool, args) — execute any tool by name with args
+Common tools:
+- clone_repo(repo) — clone GitHub repo
+- grep_search(pattern, path) — regex search via MCP server
+- read_file(path, start_line, end_line) — read file contents
+- list_files(path, recursive) — list directory
+- code_stats(path) — language breakdown, line counts
+- repo_summary(path) — README + entry points + structure
+- knowledge_graph(path, depth) — modules, imports, definitions
+- symbol_map(path) — instant symbol index via ctags
+- git_summary, git_log, git_authors, git_timeline — git intelligence
+- deep_security_scan, secrets_scan, dependency_audit, trivy_scan — security
+- ast_search(path, pattern, language) — structural code search
+- code_edit, code_write — make changes (path must be inside cloned repo)
+- sandbox_exec — run commands in sandbox
 
 Workflow:
-1. Use tool_search to discover what's available (e.g. tool_search("dependency CVE"))
-2. Use tool_run to execute (e.g. tool_run({tool: "dependency_audit", args: {path: "/repo"}}))
-3. ALWAYS cite file paths and line numbers in format \`file.ext:42\` — outputs are verified
-4. NEVER fabricate paths or code. Tool results have [receipt:XXXX] prefixes — your claims must match the actual data.
+1. clone_repo first if user gives a GitHub URL
+2. Chain tools: clone → repo_summary → code_stats → specific scans
+3. ALWAYS cite file paths and line numbers in format \`file.ext:42\`
+4. NEVER fabricate paths. Tool outputs have [receipt:XXXX] prefixes — your claims are auto-verified.
 
 Be terse. Run tools, cite results.` }
   ];
@@ -356,7 +372,7 @@ Be terse. Run tools, cite results.` }
   let totalToolCalls = 0, totalMcpMs = 0, totalInTok = 0, totalOutTok = 0;
   const ledger = new ReceiptLedger(); // tool-call receipts for verification
 
-  for (let round = 0; round < 6; round++) {
+  for (let round = 0; round < 12; round++) {
     try {
       send('status', { type: round === 0 ? 'calling_llm' : 'calling_llm_followup', round });
       const llmStart = performance.now();
@@ -396,18 +412,32 @@ Be terse. Run tools, cite results.` }
               totalToolCalls++;
               send('tool_result', { id: tc.id, impl: 'git', elapsed: Math.round(performance.now() - toolStart), bytes: content.length, matchCount: localPath ? 1 : 0, preview: [content.slice(0, 200)] });
 
-            } else if (tc.function.name === 'grep_search') {
-              const server = await getServer(impl);
-              const result = await server.search(args);
+            } else if (['grep_search', 'read_file', 'list_files', 'code_stats'].includes(tc.function.name)) {
+              // Route through the selected MCP server (C++/Rust/Swift/Python)
+              // Falls back to Node executeTool if MCP server doesn't implement this tool yet
+              let result, usedImpl = impl;
+              try {
+                const server = await getServer(impl);
+                result = await server.callTool(tc.function.name, args);
+                // Detect "method not found" errors
+                if (result.text.includes('Method not found') || result.text.includes('Unknown') || result.text === 'No results') {
+                  throw new Error('tool not implemented in ' + impl);
+                }
+              } catch (e) {
+                // Fallback to Node executeTool
+                const fallback = executeTool(tc.function.name, args);
+                if (fallback === null) throw e;
+                result = { text: fallback, elapsed: Math.round(performance.now() - toolStart), bytes: Buffer.byteLength(fallback) };
+                usedImpl = 'system';
+              }
               totalToolCalls++;
               totalMcpMs += result.elapsed;
               const fullText = result.text;
-              content = fullText.length > 4000 ? fullText.slice(0, 4000) + '\n...(truncated)' : fullText;
-              // Record receipt with full output (not truncated) for verification
+              content = fullText.length > 6000 ? fullText.slice(0, 6000) + '\n...(truncated)' : fullText;
               const receiptId = ledger.record(tc.function.name, args, fullText);
               content = `[receipt:${receiptId}]\n` + content;
-              const matchLines = fullText.split('\n').filter(l => l.trim()).slice(0, 30);
-              send('tool_result', { id: tc.id, impl, elapsed: result.elapsed, bytes: result.bytes, matchCount: matchLines.length, preview: matchLines.slice(0, 15), receipt: receiptId });
+              const lines = fullText.split('\n').filter(l => l.trim()).slice(0, 30);
+              send('tool_result', { id: tc.id, impl: usedImpl, elapsed: result.elapsed, bytes: result.bytes, matchCount: lines.length, preview: lines.slice(0, 15), receipt: receiptId });
 
             } else {
               // All other tools (Tier 1-4)
@@ -472,7 +502,7 @@ Be terse. Run tools, cite results.` }
           const trustReport = await verify(content, ledger, {
             useJudge,
             apiKey: process.env.OPENROUTER_API_KEY,
-            model: 'openai/gpt-oss-safeguard-20b',
+            model: 'google/gemma-4-26b-a4b-it',
           });
           send('verification', trustReport);
         } catch (e) {
@@ -854,6 +884,35 @@ app.post('/api/file/read', (req, res) => {
   if (!filePath) return res.status(400).json({ error: 'path required' });
   const result = executeTool('read_file', { path: filePath, start_line, end_line });
   res.json({ content: result });
+});
+
+// Model health check — pings each model with a tiny prompt, returns latency + status
+app.get('/api/models/health', async (_, res) => {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  const results = await Promise.all(MODELS.filter(m => !m.local).map(async (m) => {
+    const t0 = performance.now();
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: m.id, messages: [{ role: 'user', content: 'hi' }], max_tokens: 5 }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      const ms = Math.round(performance.now() - t0);
+      if (resp.status === 429) return { ...m, status: 'rate_limited', ms, ok: false };
+      if (!resp.ok) return { ...m, status: `http_${resp.status}`, ms, ok: false };
+      const data = await resp.json();
+      const provider = data.provider || 'unknown';
+      return { ...m, status: 'ok', ms, ok: true, provider };
+    } catch (e) {
+      return { ...m, status: e.name === 'AbortError' ? 'timeout' : 'error', ms: Math.round(performance.now() - t0), ok: false, error: e.message };
+    }
+  }));
+  results.sort((a, b) => (a.ok === b.ok ? a.ms - b.ms : a.ok ? -1 : 1));
+  res.json(results);
 });
 
 app.get('/api/models', (_, res) => res.json(MODELS));

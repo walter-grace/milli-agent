@@ -8,6 +8,8 @@
 #include <fstream>
 #include <algorithm>
 #include <chrono>
+#include <map>
+#include <utility>
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -459,6 +461,177 @@ static std::string handle_initialize(const std::string& id) {
         "\"serverInfo\":{\"name\":\"mcp-grep-cpp\",\"version\":\"0.2.0\"}}}";
 }
 
+// ─── File Operations: read_file, list_files, code_stats ───
+
+static std::string handle_read_file(const std::string& params) {
+    auto args_pos = params.find("\"arguments\"");
+    std::string args = (args_pos != std::string::npos) ? params.substr(args_pos) : params;
+    std::string file_path = json_get_string(args, "path");
+    int start_line = json_get_int(args, "start_line", 1);
+    int end_line = json_get_int(args, "end_line", 0);
+
+    if (file_path.empty()) return "path required";
+    struct stat st;
+    if (stat(file_path.c_str(), &st) != 0) return "File not found: " + file_path;
+    if (!S_ISREG(st.st_mode)) return file_path + " is a directory";
+    if (st.st_size > 1024 * 1024) return "File too large";
+
+    std::ifstream f(file_path);
+    if (!f) return "Cannot open: " + file_path;
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(f, line)) lines.push_back(line);
+
+    if (end_line == 0) end_line = std::min((size_t)(start_line + 100), lines.size());
+    if (end_line > (int)lines.size()) end_line = lines.size();
+    if (start_line < 1) start_line = 1;
+
+    std::ostringstream out;
+    out << "File: " << file_path << " (" << lines.size() << " lines, " << (st.st_size / 1024.0) << "KB)\n";
+    out << "Showing lines " << start_line << "-" << end_line << ":\n\n";
+    for (int i = start_line - 1; i < end_line && i < (int)lines.size(); i++) {
+        out << (i + 1) << "|" << lines[i] << "\n";
+    }
+    return out.str();
+}
+
+static std::string handle_list_files(const std::string& params) {
+    auto args_pos = params.find("\"arguments\"");
+    std::string args = (args_pos != std::string::npos) ? params.substr(args_pos) : params;
+    std::string dir_path = json_get_string(args, "path");
+    bool recursive = json_get_bool(args, "recursive");
+    std::string glob_filter = json_get_string(args, "glob");
+
+    if (dir_path.empty()) return "path required";
+    struct stat st;
+    if (stat(dir_path.c_str(), &st) != 0) return "Directory not found: " + dir_path;
+
+    std::ostringstream out;
+    if (recursive) {
+        std::string cmd = "find \"" + dir_path + "\" -type f";
+        if (!glob_filter.empty()) cmd += " -name \"" + glob_filter + "\"";
+        cmd += " 2>/dev/null | head -500";
+        std::string result = exec_cmd(cmd);
+        std::istringstream stream(result);
+        std::string line;
+        int count = 0;
+        std::vector<std::string> files;
+        while (std::getline(stream, line)) { if (!line.empty()) { files.push_back(line); count++; } }
+        out << dir_path << " (" << count << " files)\n\n";
+        for (auto& f : files) out << "  " << f << "\n";
+    } else {
+        DIR* d = opendir(dir_path.c_str());
+        if (!d) return "Cannot open directory";
+        out << dir_path << "/\n\n";
+        struct dirent* entry;
+        std::vector<std::pair<std::string, bool>> entries;
+        while ((entry = readdir(d)) != nullptr) {
+            std::string name = entry->d_name;
+            if (name == "." || name == "..") continue;
+            std::string full = dir_path + "/" + name;
+            struct stat est;
+            bool is_dir = (stat(full.c_str(), &est) == 0 && S_ISDIR(est.st_mode));
+            entries.push_back({name, is_dir});
+        }
+        closedir(d);
+        std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+            if (a.second != b.second) return a.second; // dirs first
+            return a.first < b.first;
+        });
+        for (auto& [name, is_dir] : entries) {
+            if (is_dir) {
+                out << "  DIR  " << name << "/\n";
+            } else {
+                struct stat est;
+                std::string full = dir_path + "/" + name;
+                stat(full.c_str(), &est);
+                long sz = est.st_size;
+                std::string sz_str;
+                if (sz > 1024 * 1024) sz_str = std::to_string(sz / (1024 * 1024)) + "MB";
+                else if (sz > 1024) sz_str = std::to_string(sz / 1024) + "KB";
+                else sz_str = std::to_string(sz) + "B";
+                out << "  FILE " << name << " (" << sz_str << ")\n";
+            }
+        }
+    }
+    return out.str();
+}
+
+static std::string handle_code_stats(const std::string& params) {
+    auto args_pos = params.find("\"arguments\"");
+    std::string args = (args_pos != std::string::npos) ? params.substr(args_pos) : params;
+    std::string dir_path = json_get_string(args, "path");
+
+    if (dir_path.empty()) return "path required";
+    struct stat st;
+    if (stat(dir_path.c_str(), &st) != 0) return "Not found: " + dir_path;
+
+    // Use find to get all files
+    std::string cmd = "find \"" + dir_path + "\" -type f -not -path \"*/.git/*\" -not -path \"*/node_modules/*\" -not -path \"*/target/*\" 2>/dev/null | head -5000";
+    std::string result = exec_cmd(cmd);
+
+    std::map<std::string, int> ext_counts;
+    std::map<std::string, long> ext_lines;
+    long total_lines = 0;
+    long total_size = 0;
+    int file_count = 0;
+
+    std::istringstream stream(result);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (line.empty()) continue;
+        file_count++;
+        // Get extension
+        size_t dot = line.rfind('.');
+        std::string ext = (dot != std::string::npos) ? line.substr(dot) : "";
+        ext_counts[ext]++;
+
+        struct stat fst;
+        if (stat(line.c_str(), &fst) == 0) {
+            total_size += fst.st_size;
+            if (fst.st_size < 512 * 1024) {
+                std::ifstream fh(line);
+                if (fh) {
+                    std::string fline;
+                    long n = 0;
+                    while (std::getline(fh, fline)) n++;
+                    ext_lines[ext] += n;
+                    total_lines += n;
+                }
+            }
+        }
+    }
+
+    // Language map
+    std::map<std::string, std::string> lang_map = {
+        {".js","JavaScript"},{".ts","TypeScript"},{".py","Python"},{".go","Go"},{".rs","Rust"},
+        {".zig","Zig"},{".swift","Swift"},{".c","C"},{".cpp","C++"},{".h","C/C++ Header"},
+        {".java","Java"},{".rb","Ruby"},{".md","Markdown"},{".json","JSON"},{".yaml","YAML"},
+        {".yml","YAML"},{".toml","TOML"},{".html","HTML"},{".css","CSS"},{".sh","Shell"}
+    };
+
+    std::ostringstream out;
+    out << "Code Stats [C++]: " << dir_path << "\n";
+    out << "==================================================\n\n";
+    out << "Total: " << file_count << " files, " << total_lines << " lines, "
+        << (total_size / (1024.0 * 1024.0)) << "MB\n\nLanguage Breakdown:\n";
+
+    // Sort by lines descending
+    std::vector<std::pair<std::string, long>> sorted(ext_lines.begin(), ext_lines.end());
+    std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+
+    for (auto& [ext, lines] : sorted) {
+        std::string lang = lang_map.count(ext) ? lang_map[ext] : ext;
+        int count = ext_counts[ext];
+        double pct = total_lines > 0 ? (lines * 100.0 / total_lines) : 0;
+        out << "  " << lang;
+        for (int i = lang.size(); i < 20; i++) out << " ";
+        out << " " << lines << " lines  " << count << " files  " << pct << "%\n";
+    }
+
+    return out.str();
+}
+
 static std::string handle_tools_list(const std::string& id) {
     return "{\"jsonrpc\":\"2.0\",\"id\":" + id +
         ",\"result\":{\"tools\":["
@@ -486,8 +659,22 @@ static std::string handle_tool_call(const std::string& id, const std::string& pa
     if (tool_name == "openapi_search") {
         std::string result = handle_openapi_search(params);
         return "{\"jsonrpc\":\"2.0\",\"id\":" + id +
-            ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" +
-            escape_json(result) + "\"}]}}";
+            ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" + escape_json(result) + "\"}]}}";
+    }
+    if (tool_name == "read_file") {
+        std::string result = handle_read_file(params);
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id +
+            ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" + escape_json(result) + "\"}]}}";
+    }
+    if (tool_name == "list_files") {
+        std::string result = handle_list_files(params);
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id +
+            ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" + escape_json(result) + "\"}]}}";
+    }
+    if (tool_name == "code_stats") {
+        std::string result = handle_code_stats(params);
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id +
+            ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" + escape_json(result) + "\"}]}}";
     }
 
     // Default: grep_search

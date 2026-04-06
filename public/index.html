@@ -66,7 +66,26 @@ code,.mono { font-family:'JetBrains Mono',monospace; }
 .msg-user { display:flex; justify-content:flex-end; margin-bottom:16px; animation:fadeIn .3s ease-out; }
 .msg-user > div { background:linear-gradient(135deg, var(--purple), #7c3aed); color:#fff; border-radius:var(--radius) var(--radius) 4px var(--radius); padding:10px 14px; font-size:14px; max-width:75%; box-shadow:var(--shadow-sm); }
 .msg-asst { margin-bottom:20px; animation:fadeIn .3s ease-out; }
-.bubble { background:var(--bg2); border:1px solid var(--border); border-radius:4px var(--radius) var(--radius) var(--radius); padding:12px 16px; font-size:14px; max-width:80%; white-space:pre-wrap; line-height:1.7; }
+.bubble { background:var(--bg2); border:1px solid var(--border); border-radius:4px var(--radius) var(--radius) var(--radius); padding:14px 18px; font-size:14px; max-width:85%; line-height:1.7; }
+.bubble h1,.bubble h2,.bubble h3,.bubble h4 { font-weight:700; margin:14px 0 6px; line-height:1.3; }
+.bubble h1 { font-size:20px; }
+.bubble h2 { font-size:17px; color:var(--fg); border-bottom:1px solid var(--border); padding-bottom:4px; }
+.bubble h3 { font-size:15px; color:var(--fg); }
+.bubble h4 { font-size:14px; color:var(--fg2); }
+.bubble p { margin:8px 0; }
+.bubble ul,.bubble ol { margin:8px 0 8px 22px; }
+.bubble li { margin:3px 0; }
+.bubble strong { font-weight:700; color:var(--fg); }
+.bubble em { font-style:italic; color:var(--fg2); }
+.bubble code { background:rgba(139,92,246,.12); color:#e879f9; padding:1px 6px; border-radius:4px; font-size:12px; font-family:'JetBrains Mono',monospace; }
+.bubble pre { background:#0a0a0a; border:1px solid var(--border); border-radius:8px; padding:12px 14px; margin:10px 0; overflow-x:auto; }
+.bubble pre code { background:transparent; color:#d4d4d8; padding:0; font-size:12px; }
+.bubble a { color:var(--purple); text-decoration:underline; }
+.bubble blockquote { border-left:3px solid var(--purple); padding-left:12px; margin:8px 0; color:var(--fg2); font-style:italic; }
+.bubble hr { border:none; border-top:1px solid var(--border); margin:14px 0; }
+.bubble table { border-collapse:collapse; margin:10px 0; font-size:13px; }
+.bubble th,.bubble td { border:1px solid var(--border); padding:6px 10px; text-align:left; }
+.bubble th { background:var(--bg3); font-weight:600; }
 .stats { display:flex; flex-wrap:wrap; gap:12px; margin-top:8px; font-size:11px; color:var(--fg3); }
 .loading { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--fg3); margin-top:4px; }
 .spinner { width:14px; height:14px; border:2px solid var(--bg3); border-top:2px solid var(--purple); border-radius:50%; display:inline-block; animation:spin .7s linear infinite; }
@@ -276,7 +295,7 @@ const IMPLS = {cpp:{name:'C++',color:'#00a0e4',icon:'⚡'},rust:{name:'Rust',col
 const fmt = ms => ms<1000?Math.round(ms)+'ms':(ms/1000).toFixed(1)+'s';
 const h = (tag, props, ...kids) => { const el=document.createElement(tag); if(props) Object.entries(props).forEach(([k,v])=>{ if(k==='style'&&typeof v==='object') Object.assign(el.style,v); else if(k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(),v); else if(k==='className') el.className=v; else if(k==='innerHTML') el.innerHTML=v; else el.setAttribute(k,v); }); kids.flat(9).forEach(c=>{ if(c==null)return; el.appendChild(typeof c==='string'?document.createTextNode(c):c); }); return el; };
 
-let state = { tab:'search', model:'google/gemma-4-26b-a4b-it', impl:'cpp', models:[], activeModels:['google/gemma-4-26b-a4b-it'], ready:0, msgs:[], input:'', sending:false, racePattern:'', racePath:'https://github.com/walter-grace/milli-agent', raceResults:{}, raceWinner:null, racing:false, sessionCost:0, accountCost:0, cacheHits:0, cacheSaved:0 };
+let state = { tab:'search', model:'google/gemma-4-26b-a4b-it', impl:'cpp', models:[], activeModels:['google/gemma-4-26b-a4b-it'], ready:0, msgs:[], input:'', sending:false, racePattern:'', racePath:'https://github.com/walter-grace/milli-agent', raceResults:{}, raceWinner:null, racing:false, sessionCost:0, accountCost:0, cacheHits:0, cacheSaved:0, modelHealth:{} };
 let currentTab = null;
 let chatInput = null; // persistent textarea ref
 let raceInput = null; // persistent race input ref
@@ -735,8 +754,15 @@ function buildNav() {
     const check = h('div',{style:{width:'14px',height:'14px',borderRadius:'4px',border:'1px solid '+(active?'var(--purple)':'var(--border)'),background:active?'var(--purple)':'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,transition:'all .15s',fontSize:'9px',color:'#fff'}});
     if (active) check.textContent = '✓';
     row.appendChild(check);
+    // Health dot
+    const health = state.modelHealth?.[m.id];
+    const healthColor = health ? (health.ok ? 'var(--green)' : 'var(--red)') : '#666';
+    const healthTitle = health ? (health.ok ? 'OK '+health.ms+'ms' : health.status) : 'unknown';
+    const dot = h('span',{title:healthTitle,style:{width:'6px',height:'6px',borderRadius:'50%',background:healthColor,flexShrink:0}});
+    row.appendChild(dot);
     row.appendChild(h('span',{style:{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},m.name));
-    if (m.free) row.appendChild(h('span',{style:{marginLeft:'auto',fontSize:'9px',color:'var(--green)',fontWeight:600,flexShrink:0}},'free'));
+    if (health?.ok && health.ms) row.appendChild(h('span',{style:{marginLeft:'auto',fontSize:'9px',color:'var(--fg3)',fontFamily:'monospace',flexShrink:0}},health.ms+'ms'));
+    else if (m.free) row.appendChild(h('span',{style:{marginLeft:'auto',fontSize:'9px',color:'var(--green)',fontWeight:600,flexShrink:0}},'free'));
     modelList.appendChild(row);
   });
   footer.appendChild(modelList);
@@ -761,7 +787,11 @@ function renderSelect(cls,val,opts,onChange) {
 }
 
 function renderToolCard(tc) {
-  const impl = IMPLS[tc.impl]||IMPLS.cpp;
+  // For MCP-backed tools (grep_search), use the actual MCP impl from the result.
+  // For system tools (read_file, code_stats, etc), use the user's selected server.
+  const isMcp = ['grep_search', 'read_file', 'list_files', 'code_stats'].includes(tc.name);
+  const implId = isMcp ? (tc.impl || state.impl) : state.impl;
+  const impl = IMPLS[implId] || IMPLS.cpp;
   const loading = !tc.result;
   const card = h('div',{className:'tc'});
 
@@ -769,7 +799,7 @@ function renderToolCard(tc) {
     loading ? h('span',{className:'spinner'}) : h('span',null,'▶'),
     h('span',null,(loading?'Calling ':'Result from ')),
     h('code',{style:{color:'var(--purple)',fontSize:'11px'}},tc.name||'tool'),
-    h('span',{className:'tc-badge',style:{background:impl.color+'15',color:impl.color,border:'1px solid '+impl.color+'30'}},impl.icon+' '+impl.name),
+    isMcp ? h('span',{className:'tc-badge',style:{background:impl.color+'15',color:impl.color,border:'1px solid '+impl.color+'30'}},impl.icon+' '+impl.name) : null,
   );
   if(tc.result) head.appendChild(h('span',{style:{marginLeft:'auto',fontFamily:'monospace',fontWeight:700,color:'var(--green)',fontSize:'12px'}},fmt(tc.result.elapsed)));
   card.appendChild(head);
@@ -846,7 +876,7 @@ function buildMsgList() {
       } else {
         const asst = h('div',{className:'msg-asst'});
         (msg.toolCalls||[]).forEach(tc => asst.appendChild(renderToolCard(tc)));
-        if(msg.content) asst.appendChild(h('div',{className:'bubble'},msg.content));
+        if(msg.content) { const b = h('div',{className:'bubble'}); b.innerHTML = mdToHtml(msg.content); asst.appendChild(b); }
         if(msg.status) asst.appendChild(h('div',{className:'loading'},h('span',{className:'spinner'}),msg.status==='searching'?'Searching...':'Thinking...'));
         if(msg.stats) {
           const costStr = msg.stats.cost != null ? '$'+msg.stats.cost.toFixed(6) : '';
@@ -917,7 +947,9 @@ function chatUpdateStatus(status) {
 
 function chatAddToolCall(tc) {
   if (!liveChatEl) return;
-  const impl = IMPLS[tc.impl] || IMPLS.cpp;
+  const isMcp = ['grep_search', 'read_file', 'list_files', 'code_stats'].includes(tc.name);
+  const implId = isMcp ? (tc.impl || state.impl) : state.impl;
+  const impl = IMPLS[implId] || IMPLS.cpp;
   const card = h('div',{className:'tc anim'});
 
   // Header with spinner
@@ -925,7 +957,7 @@ function chatAddToolCall(tc) {
     h('span',{className:'spinner'}),
     h('span',null,'Calling '),
     h('code',{style:{color:'var(--purple)',fontSize:'11px'}},tc.name||'tool'),
-    h('span',{className:'tc-badge',style:{background:impl.color+'15',color:impl.color,border:'1px solid '+impl.color+'30'}},impl.icon+' '+impl.name),
+    isMcp ? h('span',{className:'tc-badge',style:{background:impl.color+'15',color:impl.color,border:'1px solid '+impl.color+'30'}},impl.icon+' '+impl.name) : null,
   );
   card.appendChild(head);
 
@@ -959,11 +991,14 @@ function chatUpdateToolResult(result) {
   const head = card.querySelector('.tc-head');
   if (head) {
     head.innerHTML = '';
-    const impl = IMPLS[result.impl] || IMPLS.cpp;
+    // Show MCP badge for tools routed through the MCP server
+    const isMcp = (result.impl && result.impl !== 'system' && result.impl !== 'git');
+    const implId = isMcp ? result.impl : null;
+    const impl = isMcp ? (IMPLS[implId] || IMPLS.cpp) : null;
     head.appendChild(h('span',null,'▶'));
     head.appendChild(h('span',null,'Result from '));
     head.appendChild(h('code',{style:{color:'var(--purple)',fontSize:'11px'}},result.name||'tool'));
-    head.appendChild(h('span',{className:'tc-badge',style:{background:impl.color+'15',color:impl.color,border:'1px solid '+impl.color+'30'}},impl.icon+' '+impl.name));
+    if (impl) head.appendChild(h('span',{className:'tc-badge',style:{background:impl.color+'15',color:impl.color,border:'1px solid '+impl.color+'30'}},impl.icon+' '+impl.name));
     head.appendChild(h('span',{style:{marginLeft:'auto',fontFamily:'monospace',fontWeight:700,color:'var(--green)',fontSize:'12px'}},fmt(result.elapsed)));
   }
 
@@ -995,6 +1030,88 @@ function chatUpdateToolResult(result) {
 let chatTextTimer = null;
 let chatPendingText = null;
 
+// Markdown → HTML — handles headings, bold, italic, code, lists, links, blockquote, hr, tables
+function mdToHtml(text) {
+  if (!text) return '';
+  // Escape HTML first
+  let s = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  // Code fences ```lang\n...\n```
+  s = s.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => {
+    return '<pre><code>' + code.replace(/\n$/,'') + '</code></pre>';
+  });
+
+  // Inline code `...`
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
+  // Headings
+  s = s.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  s = s.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  s = s.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  s = s.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // Horizontal rule
+  s = s.replace(/^---+$/gm, '<hr>');
+
+  // Bold **...** and __...__
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+
+  // Italic *...* (avoid matching bold) and _..._
+  s = s.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
+  s = s.replace(/(?<!_)_([^_\n]+)_(?!_)/g, '<em>$1</em>');
+
+  // Links [text](url)
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+
+  // Blockquotes
+  s = s.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+  // Lists — group consecutive list items
+  // Unordered
+  s = s.replace(/(^[ \t]*[*\-+] .+(?:\n[ \t]*[*\-+] .+)*)/gm, (match) => {
+    const items = match.split('\n').map(l => l.replace(/^[ \t]*[*\-+] /, '').trim()).filter(Boolean);
+    return '<ul>' + items.map(i => '<li>' + i + '</li>').join('') + '</ul>';
+  });
+  // Ordered
+  s = s.replace(/(^[ \t]*\d+\. .+(?:\n[ \t]*\d+\. .+)*)/gm, (match) => {
+    const items = match.split('\n').map(l => l.replace(/^[ \t]*\d+\. /, '').trim()).filter(Boolean);
+    return '<ol>' + items.map(i => '<li>' + i + '</li>').join('') + '</ol>';
+  });
+
+  // Tables (simple github style)
+  s = s.replace(/((?:^\|.+\|$\n?)+)/gm, (match) => {
+    const rows = match.trim().split('\n').filter(l => l.startsWith('|'));
+    if (rows.length < 2) return match;
+    const isAlign = (r) => /^\|(\s*:?-+:?\s*\|)+$/.test(r);
+    const headerCells = rows[0].split('|').slice(1, -1).map(c => c.trim());
+    const dataRows = rows.slice(isAlign(rows[1]) ? 2 : 1);
+    let html = '<table><thead><tr>';
+    headerCells.forEach(c => html += '<th>' + c + '</th>');
+    html += '</tr></thead><tbody>';
+    dataRows.forEach(r => {
+      const cells = r.split('|').slice(1, -1).map(c => c.trim());
+      html += '<tr>' + cells.map(c => '<td>' + c + '</td>').join('') + '</tr>';
+    });
+    html += '</tbody></table>';
+    return html;
+  });
+
+  // Paragraphs — wrap consecutive non-html lines
+  // Split on double newlines, wrap text blocks
+  const blocks = s.split(/\n\n+/);
+  s = blocks.map(block => {
+    const trimmed = block.trim();
+    if (!trimmed) return '';
+    // Skip if already starts with HTML tag
+    if (/^<(h[1-6]|ul|ol|pre|blockquote|hr|table|p)/.test(trimmed)) return trimmed;
+    // Convert single newlines to <br>
+    return '<p>' + trimmed.replace(/\n/g, '<br>') + '</p>';
+  }).join('\n');
+
+  return s;
+}
+
 function chatAppendText(text) {
   if (!liveChatEl) return;
   if (!liveBubbleEl) {
@@ -1011,7 +1128,7 @@ function chatAppendText(text) {
   chatTextTimer = setTimeout(() => {
     chatTextTimer = null;
     if (chatPendingText !== null) {
-      liveBubbleEl.textContent = chatPendingText;
+      liveBubbleEl.innerHTML = mdToHtml(chatPendingText);
       chatPendingText = null;
       const msgArea = document.getElementById('chat-messages');
       if (msgArea) msgArea.scrollTop = msgArea.scrollHeight;
@@ -1104,10 +1221,28 @@ function renderChat() {
   modelSel.style.cssText = 'height:26px;font-size:11px;border-radius:6px;background:var(--bg3);border:1px solid transparent;color:var(--fg2);padding:0 6px;';
   toolbar.appendChild(modelSel);
 
-  // Server selector inline
-  const implSel = renderSelect('sel',state.impl,Object.entries(IMPLS).map(([k,v])=>({value:k,label:v.icon+' '+v.name})),v=>{state.impl=v;});
-  implSel.style.cssText = 'height:26px;font-size:11px;border-radius:6px;background:var(--bg3);border:1px solid transparent;color:var(--fg2);padding:0 6px;';
-  toolbar.appendChild(implSel);
+  // Server selector — inline button row instead of <select> for visibility
+  const implWrap = h('div',{style:{display:'flex',gap:'4px',alignItems:'center'}});
+  Object.entries(IMPLS).forEach(([id, impl]) => {
+    const active = state.impl === id;
+    const btn = h('button',{style:{padding:'4px 10px',borderRadius:'6px',border:'1px solid '+(active?impl.color:'var(--border)'),background:active?impl.color+'20':'transparent',color:active?impl.color:'var(--fg3)',fontSize:'11px',fontWeight:active?700:500,cursor:'pointer',transition:'all .15s'},
+      onClick:()=>{
+        state.impl = id;
+        // Update all impl buttons in this row
+        implWrap.querySelectorAll('button').forEach((b, i) => {
+          const ids = Object.keys(IMPLS);
+          const isActive = ids[i] === id;
+          const c = IMPLS[ids[i]].color;
+          b.style.borderColor = isActive ? c : 'var(--border)';
+          b.style.background = isActive ? c + '20' : 'transparent';
+          b.style.color = isActive ? c : 'var(--fg3)';
+          b.style.fontWeight = isActive ? 700 : 500;
+        });
+      }},
+      impl.icon + ' ' + impl.name);
+    implWrap.appendChild(btn);
+  });
+  toolbar.appendChild(implWrap);
 
   // Tool count badge
   toolbar.appendChild(h('span',{style:{fontSize:'10px',color:'var(--fg3)',fontFamily:'monospace',padding:'2px 8px',borderRadius:'4px',background:'var(--bg3)'}},'27 tools'));
@@ -2326,6 +2461,16 @@ function renderHealStep(container, step) {
 fetch('/api/models').then(r=>r.json()).then(m=>{state.models=m; render();}).catch(()=>render());
 fetch('/api/warmup',{method:'POST'}).then(r=>r.json()).then(s=>{state.ready=Object.values(s).filter(x=>x.ready).length; render();}).catch(()=>{});
 fetch('/api/costs').then(r=>r.json()).then(c=>{if(c.session) state.sessionCost=c.session.totalCost; if(c.account) state.accountCost=c.account.total; if(c.cache){state.cacheHits=c.cache.hits;state.cacheSaved=c.cache.savedTokens;} refreshNav();}).catch(()=>{});
+// Fetch model health on load + every 60s
+function checkModelHealth() {
+  fetch('/api/models/health').then(r=>r.json()).then(h=>{
+    state.modelHealth = {};
+    h.forEach(m => state.modelHealth[m.id] = m);
+    refreshNav();
+  }).catch(()=>{});
+}
+checkModelHealth();
+setInterval(checkModelHealth, 60000);
 render();
 </script>
 </body>

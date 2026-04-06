@@ -285,7 +285,7 @@ export async function frontierJudge(responseText, ledger, opts = {}) {
   const apiKey = opts.apiKey || process.env.OPENROUTER_API_KEY;
   if (!apiKey) return { skipped: true, reason: 'no api key' };
 
-  const judgeModel = opts.model || 'openai/gpt-oss-safeguard-20b';
+  const judgeModel = opts.model || 'google/gemma-4-26b-a4b-it';
   const corpus = ledger.corpus();
   const corpusSample = corpus.length > 8000 ? corpus.slice(0, 4000) + '\n...[truncated]...\n' + corpus.slice(-4000) : corpus;
 

@@ -735,11 +735,23 @@ export function executeTool(name, args) {
     case 'openapi_search': return execOpenAPISearch(args);
     case 'tool_search': return JSON.stringify(searchToolCatalog(args.query || ''), null, 2);
     case 'tool_run': {
-      // Recursive call to executeTool with the inner tool name
-      if (!args.tool) return 'Error: tool name required';
-      const inner = executeTool(args.tool, args.args || {});
+      // Accept flexible call formats:
+      //   { tool: "X", args: {...} }    — preferred
+      //   { tool: "X", ...other fields } — flat (LLM convenience)
+      //   { name: "X", args: {...} }    — common alt
+      const toolName = args.tool || args.name;
+      if (!toolName) return 'Error: tool name required (pass {tool: "name", args: {...}})';
+      let toolArgs = args.args;
+      if (!toolArgs || typeof toolArgs !== 'object') {
+        // Build args from remaining fields (drop tool/name)
+        toolArgs = {};
+        for (const k of Object.keys(args)) {
+          if (k !== 'tool' && k !== 'name' && k !== 'args') toolArgs[k] = args[k];
+        }
+      }
+      const inner = executeTool(toolName, toolArgs);
       if (inner !== null) return inner;
-      return `Error: unknown tool "${args.tool}". Use tool_search to find available tools.`;
+      return `Error: unknown tool "${toolName}". Use tool_search to find available tools.`;
     }
     default: return null; // not handled here
   }

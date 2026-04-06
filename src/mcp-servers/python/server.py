@@ -42,7 +42,156 @@ TOOLS = [
             "required": ["path"],
         },
     },
+    {
+        "name": "read_file",
+        "description": "Read file contents with optional line range",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "start_line": {"type": "integer"},
+                "end_line": {"type": "integer"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "list_files",
+        "description": "List files in directory",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "recursive": {"type": "boolean"},
+                "glob": {"type": "string"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "code_stats",
+        "description": "Code statistics: lines per language, file counts",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
 ]
+
+
+def read_file_tool(args):
+    file_path = args.get("path", "")
+    start_line = args.get("start_line", 1)
+    end_line = args.get("end_line")
+    if not file_path or not os.path.exists(file_path):
+        return f"File not found: {file_path}"
+    try:
+        if not os.path.isfile(file_path):
+            return f"{file_path} is a directory, use list_files instead"
+        size = os.path.getsize(file_path)
+        if size > 1024 * 1024:
+            return f"File too large ({size/1024/1024:.1f}MB). Max 1MB."
+        with open(file_path, 'r', errors='replace') as f:
+            content = f.read()
+        lines = content.split('\n')
+        if not end_line:
+            end_line = min(start_line + 100, len(lines))
+        sliced = lines[start_line-1:end_line]
+        header = f"File: {file_path} ({len(lines)} lines, {size/1024:.1f}KB)\nShowing lines {start_line}-{end_line}:\n\n"
+        return header + '\n'.join(f"{start_line+i}|{l}" for i, l in enumerate(sliced))
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def list_files_tool(args):
+    dir_path = args.get("path", "")
+    recursive = args.get("recursive", False)
+    glob_filter = args.get("glob")
+    if not dir_path or not os.path.exists(dir_path):
+        return f"Directory not found: {dir_path}"
+    try:
+        if recursive:
+            files = []
+            for root, dirs, fnames in os.walk(dir_path):
+                dirs[:] = [d for d in dirs if d not in ('.git', 'node_modules', 'target', 'dist')]
+                for fn in fnames:
+                    if glob_filter:
+                        import fnmatch
+                        if not fnmatch.fnmatch(fn, glob_filter):
+                            continue
+                    files.append(os.path.join(root, fn))
+                if len(files) >= 500:
+                    break
+            out = f"{dir_path} ({len(files)} files)\n\n"
+            dirs_map = {}
+            for f in files:
+                rel = os.path.relpath(f, dir_path)
+                d = os.path.dirname(rel) or '.'
+                dirs_map.setdefault(d, []).append(os.path.basename(f))
+            for d in sorted(dirs_map.keys()):
+                out += f"{d}/\n"
+                for fn in dirs_map[d]:
+                    out += f"  {fn}\n"
+            return out
+        else:
+            entries = sorted(os.listdir(dir_path), key=lambda x: (not os.path.isdir(os.path.join(dir_path, x)), x))
+            out = f"{dir_path}/\n\n"
+            for e in entries:
+                full = os.path.join(dir_path, e)
+                if os.path.isdir(full):
+                    out += f"  DIR  {e}/\n"
+                else:
+                    sz = os.path.getsize(full)
+                    sz_str = f"{sz/1024/1024:.1f}MB" if sz > 1024*1024 else f"{sz/1024:.1f}KB" if sz > 1024 else f"{sz}B"
+                    out += f"  FILE {e} ({sz_str})\n"
+            return out
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def code_stats_tool(args):
+    dir_path = args.get("path", "")
+    if not os.path.exists(dir_path):
+        return f"Not found: {dir_path}"
+    try:
+        ext_counts = {}
+        ext_lines = {}
+        total_lines = 0
+        total_size = 0
+        file_count = 0
+        for root, dirs, files in os.walk(dir_path):
+            dirs[:] = [d for d in dirs if d not in ('.git', 'node_modules', 'target', 'dist', '.zig-cache')]
+            for f in files:
+                if file_count >= 5000:
+                    break
+                fp = os.path.join(root, f)
+                ext = os.path.splitext(f)[1] or os.path.basename(f)
+                ext_counts[ext] = ext_counts.get(ext, 0) + 1
+                try:
+                    size = os.path.getsize(fp)
+                    total_size += size
+                    if size < 512 * 1024:
+                        with open(fp, 'rb') as fh:
+                            n_lines = fh.read().count(b'\n') + 1
+                        ext_lines[ext] = ext_lines.get(ext, 0) + n_lines
+                        total_lines += n_lines
+                except:
+                    pass
+                file_count += 1
+        lang_map = {'.js':'JavaScript','.ts':'TypeScript','.py':'Python','.go':'Go','.rs':'Rust','.zig':'Zig',
+                    '.swift':'Swift','.c':'C','.cpp':'C++','.h':'C/C++ Header','.java':'Java','.rb':'Ruby',
+                    '.md':'Markdown','.json':'JSON','.yaml':'YAML','.yml':'YAML','.toml':'TOML','.html':'HTML','.css':'CSS','.sh':'Shell'}
+        out = f"Code Stats [Python]: {dir_path}\n{'='*50}\n\n"
+        out += f"Total: {file_count} files, {total_lines:,} lines, {total_size/1024/1024:.1f}MB\n\nLanguage Breakdown:\n"
+        for ext, lines in sorted(ext_lines.items(), key=lambda x: -x[1]):
+            lang = lang_map.get(ext, ext)
+            count = ext_counts.get(ext, 0)
+            pct = (lines / total_lines * 100) if total_lines else 0
+            out += f"  {lang:<20} {lines:>8} lines  {count:>4} files  {pct:.1f}%\n"
+        return out
+    except Exception as e:
+        return f"Error: {e}"
 
 
 def grep_search(args):
@@ -246,6 +395,12 @@ def handle_request(req):
         args = params.get("arguments", {})
         if tool_name == "openapi_search":
             text = openapi_search(args)
+        elif tool_name == "read_file":
+            text = read_file_tool(args)
+        elif tool_name == "list_files":
+            text = list_files_tool(args)
+        elif tool_name == "code_stats":
+            text = code_stats_tool(args)
         else:
             text = grep_search(args)
         return {
