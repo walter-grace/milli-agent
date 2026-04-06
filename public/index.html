@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Milli-Agent</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root { --bg:#09090b; --bg2:#18181b; --bg3:#27272a; --border:#3f3f46; --fg:#fafafa; --fg2:#a1a1aa; --fg3:#71717a; --purple:#8b5cf6; --green:#22c55e; }
+* { margin:0; padding:0; box-sizing:border-box; }
+html,body { height:100%; background:var(--bg); color:var(--fg); font-family:'Inter',system-ui,sans-serif; }
+code,.mono { font-family:'JetBrains Mono',monospace; }
+::-webkit-scrollbar { width:6px; } ::-webkit-scrollbar-thumb { background:#333; border-radius:99px; }
+@keyframes spin { to{transform:rotate(360deg);} }
+@keyframes fadeIn { from{opacity:0;transform:translateY(6px);} to{opacity:1;transform:translateY(0);} }
+@keyframes barGrow { from{width:0;} }
+@keyframes f1scan {
+  0% { left:-30%; }
+  100% { left:130%; }
+}
+.f1-loader { position:relative; height:3px; background:var(--bg3); overflow:hidden; border-radius:2px; }
+.f1-loader::after {
+  content:''; position:absolute; top:0; left:-30%; width:30%; height:100%;
+  background:linear-gradient(90deg, transparent, var(--green), var(--green), transparent);
+  animation: f1scan 0.7s ease-in-out infinite;
+  border-radius:2px;
+}
+.f1-loader.fast::after { animation-duration:0.4s; background:linear-gradient(90deg, transparent, #00ff88, #00ff88, transparent); }
+.f1-dots { display:inline-flex; gap:3px; align-items:center; }
+.f1-dots span { width:4px; height:4px; border-radius:50%; background:var(--green); animation:f1pulse 0.6s ease-in-out infinite; }
+.f1-dots span:nth-child(2) { animation-delay:0.1s; }
+.f1-dots span:nth-child(3) { animation-delay:0.2s; }
+.f1-dots span:nth-child(4) { animation-delay:0.3s; }
+@keyframes f1pulse { 0%,100%{opacity:0.2;transform:scale(0.8);} 50%{opacity:1;transform:scale(1.3);} }
+
+#app { display:flex; flex-direction:column; height:100vh; }
+.nav { display:flex; align-items:center; gap:10px; height:48px; padding:0 16px; border-bottom:1px solid var(--border); flex-shrink:0; }
+.sel { height:28px; background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:0 8px; font-size:11px; color:var(--fg); outline:none; }
+.tabs { display:inline-flex; gap:2px; padding:3px; background:var(--bg3); border-radius:10px; }
+.tab { padding:5px 14px; border-radius:8px; font-size:12px; font-weight:500; border:none; cursor:pointer; background:transparent; color:var(--fg3); }
+.tab-active { background:var(--bg); color:var(--fg); box-shadow:0 1px 3px rgba(0,0,0,.3); }
+
+.main { flex:1; overflow:hidden; display:flex; flex-direction:column; }
+.messages { flex:1; overflow-y:auto; padding:24px 16px; }
+.messages-inner { max-width:768px; margin:0 auto; }
+
+.msg-user { display:flex; justify-content:flex-end; margin-bottom:16px; animation:fadeIn .3s ease-out; }
+.msg-user > div { background:var(--fg); color:var(--bg); border-radius:12px; padding:10px 14px; font-size:14px; max-width:75%; }
+.msg-asst { margin-bottom:20px; animation:fadeIn .3s ease-out; }
+.bubble { background:var(--bg3); border-radius:12px; padding:10px 14px; font-size:14px; max-width:75%; white-space:pre-wrap; line-height:1.6; transition:opacity 0.15s; }
+.tc { transition:all 0.2s ease-out; }
+.tc-lines { animation:fadeIn 0.2s ease-out; }
+.tc-stats { animation:fadeIn 0.3s ease-out; }
+.stats { display:flex; flex-wrap:wrap; gap:12px; margin-top:8px; font-size:11px; color:var(--fg3); }
+.loading { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--fg3); margin-top:4px; }
+.spinner { width:12px; height:12px; border:2px solid #555; border-top:2px solid #fff; border-radius:50%; display:inline-block; animation:spin .7s linear infinite; }
+
+.tc { border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--bg2); margin-bottom:12px; max-width:80%; animation:fadeIn .3s ease-out; }
+.tc-head { display:flex; align-items:center; gap:8px; padding:8px 12px; font-size:13px; color:var(--fg2); cursor:pointer; }
+.tc-badge { font-size:10px; padding:2px 8px; border-radius:6px; font-weight:600; font-family:monospace; }
+.tc-args { border-top:1px solid var(--bg3); padding:6px 12px; font-size:11px; font-family:monospace; color:var(--fg3); background:rgba(0,0,0,.2); }
+.tc-lines { border-top:1px solid var(--bg3); max-height:200px; overflow-y:auto; font-size:11px; font-family:monospace; }
+.tc-line { display:flex; padding:1px 12px; }
+.tc-line:hover { background:rgba(255,255,255,.03); }
+.tc-f { color:var(--purple); width:110px; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tc-n { color:var(--fg3); width:40px; text-align:right; margin-right:8px; flex-shrink:0; }
+.tc-c { color:#d4d4d8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tc-stats { border-top:1px solid var(--bg3); display:flex; gap:16px; padding:6px 12px; font-size:10px; color:var(--fg3); }
+
+.input-area { padding:12px 16px 16px; border-top:1px solid var(--border); flex-shrink:0; }
+.input-wrap { max-width:768px; margin:0 auto; position:relative; }
+.input-wrap textarea { width:100%; resize:none; border-radius:12px; border:1px solid var(--border); background:var(--bg2); padding:12px 56px 12px 16px; font-size:14px; color:var(--fg); outline:none; font-family:inherit; line-height:1.5; }
+.input-wrap textarea:focus { border-color:var(--purple); }
+.send-btn { position:absolute; right:8px; top:8px; width:36px; height:36px; border-radius:10px; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:18px; }
+
+.empty { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:60vh; }
+.empty-icon { width:56px; height:56px; border-radius:16px; background:var(--bg3); display:flex; align-items:center; justify-content:center; font-size:24px; margin-bottom:20px; }
+.sugg-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; width:100%; max-width:560px; margin-top:24px; }
+.sugg { text-align:left; font-size:13px; padding:12px 16px; border-radius:12px; border:1px solid var(--border); background:var(--bg2); color:var(--fg2); cursor:pointer; line-height:1.4; }
+.sugg:hover { border-color:var(--purple); color:var(--fg); }
+
+.compare { padding:24px; max-width:1000px; margin:0 auto; overflow-y:auto; height:100%; }
+.row { display:flex; gap:8px; margin-bottom:16px; }
+.sinput { flex:1; padding:10px 14px; font-size:13px; font-family:monospace; background:var(--bg2); border:1px solid var(--border); border-radius:10px; color:var(--fg); outline:none; }
+.sinput:focus { border-color:var(--purple); }
+.sbtn { padding:10px 20px; font-size:13px; font-weight:600; background:var(--fg); color:var(--bg); border:none; border-radius:10px; cursor:pointer; }
+.sbtn:disabled { opacity:.3; }
+.presets { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:24px; }
+.pre { font-size:11px; font-family:monospace; padding:4px 10px; border-radius:6px; border:1px solid var(--border); background:none; color:var(--fg2); cursor:pointer; }
+.pre:hover { border-color:var(--purple); color:var(--fg); }
+.race-box { border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:16px; background:var(--bg2); }
+.lane { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+.lane:last-child { margin-bottom:0; }
+.track { flex:1; height:24px; background:var(--bg); border-radius:6px; overflow:hidden; }
+.fill { height:100%; border-radius:6px; animation:barGrow .5s ease-out; }
+.rgrid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.rcard { border-radius:12px; border:1px solid var(--border); overflow:hidden; background:var(--bg2); transition:border-color 0.3s; }
+.rhead { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--bg3); }
+.rcode { max-height:240px; overflow-y:auto; font-size:11px; font-family:monospace; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+const IMPLS = {cpp:{name:'C++',color:'#00a0e4',icon:'⚡'},rust:{name:'Rust',color:'#f74c00',icon:'🦀'},swift:{name:'Swift',color:'#f05138',icon:'🐦'},python:{name:'Python',color:'#ffd43b',icon:'🐍'}};
+const fmt = ms => ms<1000?Math.round(ms)+'ms':(ms/1000).toFixed(1)+'s';
+const h = (tag, props, ...kids) => { const el=document.createElement(tag); if(props) Object.entries(props).forEach(([k,v])=>{ if(k==='style'&&typeof v==='object') Object.assign(el.style,v); else if(k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(),v); else if(k==='className') el.className=v; else if(k==='innerHTML') el.innerHTML=v; else el.setAttribute(k,v); }); kids.flat(9).forEach(c=>{ if(c==null)return; el.appendChild(typeof c==='string'?document.createTextNode(c):c); }); return el; };
+
+let state = { tab:'search', model:'google/gemma-4-26b-a4b-it', impl:'cpp', models:[], ready:0, msgs:[], input:'', sending:false, racePattern:'', racePath:'/Users/bigneek/mcp-grep-bench/test-corpus/large', raceResults:{}, raceWinner:null, racing:false, sessionCost:0, accountCost:0 };
+let currentTab = null;
+let chatInput = null; // persistent textarea ref
+let raceInput = null; // persistent race input ref
+
+function refreshNav() {
+  const app = document.getElementById('app');
+  const oldNav = app.querySelector('.nav');
+  if (oldNav) { const newNav = buildNav(); app.replaceChild(newNav, oldNav); }
+}
+
+function render() {
+  const app = document.getElementById('app');
+
+  // Only full rebuild on tab change or first render
+  if (!app.firstChild || currentTab !== state.tab) {
+    app.innerHTML = '';
+    app.appendChild(buildNav());
+    if (state.tab==='search') app.appendChild(renderSearch());
+    else if (state.tab==='chat') app.appendChild(renderChat());
+    else app.appendChild(renderCompare());
+    currentTab = state.tab;
+  } else {
+    refreshNav();
+    if (state.tab==='chat') updateChatMessages();
+    else if (state.tab==='compare') updateCompareResults();
+    // search tab updates itself via direct DOM manipulation
+  }
+}
+
+function buildNav() {
+  return h('nav',{className:'nav'},
+    h('span',{style:{fontSize:'14px',fontWeight:700,marginRight:'8px'}},'Milli-Agent'),
+    h('div',{className:'tabs'},
+      h('button',{className:'tab'+(state.tab==='search'?' tab-active':''),onClick:()=>{state.tab='search';render();}},'Search'),
+      h('button',{className:'tab'+(state.tab==='chat'?' tab-active':''),onClick:()=>{state.tab='chat';render();}},'Chat'),
+      h('button',{className:'tab'+(state.tab==='compare'?' tab-active':''),onClick:()=>{state.tab='compare';render();}},'Compare'),
+    ),
+    h('div',{style:{flex:1}}),
+    state.sessionCost > 0 ? h('span',{style:{fontSize:'11px',color:'var(--green)',fontWeight:600,marginRight:'12px',fontFamily:'monospace'}},
+      '$'+state.sessionCost.toFixed(4)+' spent'
+    ) : null,
+    h('span',{style:{fontSize:'11px',color:'var(--fg3)',display:'flex',alignItems:'center',gap:'6px',marginRight:'8px'}},
+      h('span',{style:{width:'6px',height:'6px',borderRadius:'50%',background:state.ready===4?'var(--green)':'#eab308',display:'inline-block'}}),
+      state.ready+'/4'
+    ),
+    renderSelect('sel',state.impl,Object.entries(IMPLS).map(([k,v])=>({value:k,label:v.icon+' '+v.name})),v=>{state.impl=v;}),
+    renderSelect('sel',state.model,state.models.map(m=>({value:m.id,label:m.name+(m.free?' ✦':'')})),v=>{state.model=v;}),
+  );
+}
+
+function renderSelect(cls,val,opts,onChange) {
+  const sel = h('select',{className:cls});
+  opts.forEach(o => { const opt=h('option',{value:o.value},o.label); if(o.value===val)opt.selected=true; sel.appendChild(opt); });
+  sel.addEventListener('change',e=>{onChange(e.target.value);});
+  return sel;
+}
+
+function renderToolCard(tc) {
+  const impl = IMPLS[tc.impl]||IMPLS.cpp;
+  const loading = !tc.result;
+  const card = h('div',{className:'tc'});
+
+  const head = h('div',{className:'tc-head'},
+    loading ? h('span',{className:'spinner'}) : h('span',null,'▶'),
+    h('span',null,(loading?'Calling ':'Result from ')),
+    h('code',{style:{color:'var(--purple)',fontSize:'11px'}},'grep_search'),
+    h('span',{className:'tc-badge',style:{background:impl.color+'15',color:impl.color,border:'1px solid '+impl.color+'30'}},impl.icon+' '+impl.name),
+  );
+  if(tc.result) head.appendChild(h('span',{style:{marginLeft:'auto',fontFamily:'monospace',fontWeight:700,color:'var(--green)',fontSize:'12px'}},fmt(tc.result.elapsed)));
+  card.appendChild(head);
+
+  if(tc.args) {
+    const args = h('div',{className:'tc-args'});
+    Object.entries(tc.args).forEach(([k,v])=>{ args.appendChild(h('span',{style:{marginRight:'12px'}}, h('span',{style:{color:'var(--purple)'}},k), '='+JSON.stringify(v).slice(0,80))); });
+    card.appendChild(args);
+  }
+  if(tc.result?.preview) {
+    const lines = h('div',{className:'tc-lines'});
+    tc.result.preview.forEach(line => {
+      const p=line.split(':');
+      lines.appendChild(h('div',{className:'tc-line'}, h('span',{className:'tc-f'},p[0]?.split('/').pop()||''), h('span',{className:'tc-n'},p[1]||''), h('span',{className:'tc-c'},p.slice(2).join(':'))));
+    });
+    card.appendChild(lines);
+  }
+  if(tc.result) {
+    card.appendChild(h('div',{className:'tc-stats'},
+      h('span',null,h('b',null,String(tc.result.matchCount)),' matches'),
+      h('span',null,h('b',null,String(tc.result.bytes)),' bytes'),
+      h('span',null,h('b',null,'~'+Math.ceil(tc.result.bytes/4)),' tokens'),
+    ));
+  }
+  return card;
+}
+
+function buildMsgList() {
+  const inner = h('div',{className:'messages-inner'});
+  if(state.msgs.length===0) {
+    const empty = h('div',{className:'empty'},
+      h('div',{className:'empty-icon'},'🔍'),
+      h('h2',{style:{fontSize:'20px',fontWeight:700,marginBottom:'8px'}},'Milli-Agent'),
+      h('p',{style:{fontSize:'14px',color:'var(--fg3)',textAlign:'center',maxWidth:'400px',lineHeight:1.5}},'Millisecond code search. Paste a GitHub URL and I\'ll clone and search it.'),
+    );
+    const grid = h('div',{className:'sugg-grid'});
+    ['Find all TODO comments in the small codebase','Search for error handling patterns in Go files','Clone https://github.com/siddharthvaddem/openscreen and search for all functions','Search the large codebase for validation functions'].forEach(s => {
+      grid.appendChild(h('button',{className:'sugg',onClick:()=>{chatInput.value=s; state.input=s; updateSendBtn();}},s));
+    });
+    empty.appendChild(grid);
+    inner.appendChild(empty);
+  } else {
+    state.msgs.forEach(msg => {
+      if(msg.role==='user') {
+        inner.appendChild(h('div',{className:'msg-user'},h('div',null,msg.content)));
+      } else {
+        const asst = h('div',{className:'msg-asst'});
+        (msg.toolCalls||[]).forEach(tc => asst.appendChild(renderToolCard(tc)));
+        if(msg.content) asst.appendChild(h('div',{className:'bubble'},msg.content));
+        if(msg.status) asst.appendChild(h('div',{className:'loading'},h('span',{className:'spinner'}),msg.status==='searching'?'Searching...':'Thinking...'));
+        if(msg.stats) {
+          const costStr = msg.stats.cost != null ? '$'+msg.stats.cost.toFixed(6) : '';
+          asst.appendChild(h('div',{className:'stats'},
+            h('span',null,fmt(msg.stats.totalMs)+' total'),h('span',null,msg.stats.toolCalls+' calls'),
+            h('span',null,msg.stats.mcpMs+'ms MCP'),h('span',null,msg.stats.inTokens+'+'+msg.stats.outTokens+' tok'),
+            costStr ? h('span',{style:{color:'var(--green)',fontWeight:600}},costStr) : null,
+          ));
+        }
+        inner.appendChild(asst);
+      }
+    });
+  }
+  return inner;
+}
+
+// Live DOM refs for the current assistant message being streamed
+let liveChatEl = null;    // the .msg-asst div
+let liveBubbleEl = null;  // the .bubble text div
+let liveStatusEl = null;  // the .loading div
+let liveStatsEl = null;   // the .stats div
+let liveToolEls = [];     // array of tool card divs
+
+function chatStartAssistant() {
+  const msgArea = document.getElementById('chat-messages');
+  if (!msgArea) return;
+  const inner = msgArea.querySelector('.messages-inner');
+  if (!inner) return;
+
+  liveChatEl = h('div',{className:'msg-asst anim'});
+  liveStatusEl = h('div',{className:'loading'},h('span',{className:'spinner'}),'Thinking...');
+  liveBubbleEl = null;
+  liveStatsEl = null;
+  liveToolEls = [];
+
+  liveChatEl.appendChild(liveStatusEl);
+  inner.appendChild(liveChatEl);
+  msgArea.scrollTop = msgArea.scrollHeight;
+}
+
+function chatAddUserMsg(content) {
+  const msgArea = document.getElementById('chat-messages');
+  if (!msgArea) return;
+  let inner = msgArea.querySelector('.messages-inner');
+
+  // Remove empty state if present
+  const empty = inner?.querySelector('.empty');
+  if (empty) { inner.innerHTML = ''; }
+  if (!inner) { inner = h('div',{className:'messages-inner'}); msgArea.appendChild(inner); }
+
+  inner.appendChild(h('div',{className:'msg-user anim'},h('div',null,content)));
+  msgArea.scrollTop = msgArea.scrollHeight;
+}
+
+function chatUpdateStatus(status) {
+  if (!liveStatusEl || !liveChatEl) return;
+  if (!status) {
+    liveStatusEl.remove();
+    liveStatusEl = null;
+  } else {
+    liveStatusEl.innerHTML = '';
+    liveStatusEl.appendChild(h('span',{className:'spinner'}));
+    liveStatusEl.appendChild(document.createTextNode(status === 'searching' ? 'Searching files...' : 'Thinking...'));
+    // Make sure status is at the end
+    liveChatEl.appendChild(liveStatusEl);
+  }
+}
+
+function chatAddToolCall(tc) {
+  if (!liveChatEl) return;
+  const impl = IMPLS[tc.impl] || IMPLS.cpp;
+  const card = h('div',{className:'tc anim'});
+
+  // Header with spinner
+  const head = h('div',{className:'tc-head'},
+    h('span',{className:'spinner'}),
+    h('span',null,'Calling '),
+    h('code',{style:{color:'var(--purple)',fontSize:'11px'}},'grep_search'),
+    h('span',{className:'tc-badge',style:{background:impl.color+'15',color:impl.color,border:'1px solid '+impl.color+'30'}},impl.icon+' '+impl.name),
+  );
+  card.appendChild(head);
+
+  // Args
+  if (tc.args) {
+    const args = h('div',{className:'tc-args'});
+    Object.entries(tc.args).forEach(([k,v]) => {
+      args.appendChild(h('span',{style:{marginRight:'12px'}}, h('span',{style:{color:'var(--purple)'}},k), '='+JSON.stringify(v).slice(0,80)));
+    });
+    card.appendChild(args);
+  }
+
+  // Insert before status
+  if (liveStatusEl && liveStatusEl.parentNode === liveChatEl) {
+    liveChatEl.insertBefore(card, liveStatusEl);
+  } else {
+    liveChatEl.appendChild(card);
+  }
+  liveToolEls.push(card);
+
+  const msgArea = document.getElementById('chat-messages');
+  if (msgArea) msgArea.scrollTop = msgArea.scrollHeight;
+}
+
+function chatUpdateToolResult(result) {
+  // Find the last tool card without results
+  const card = liveToolEls.find(el => !el.querySelector('.tc-lines'));
+  if (!card) return;
+
+  // Update header - replace spinner with ▶ and add time
+  const head = card.querySelector('.tc-head');
+  if (head) {
+    head.innerHTML = '';
+    const impl = IMPLS[result.impl] || IMPLS.cpp;
+    head.appendChild(h('span',null,'▶'));
+    head.appendChild(h('span',null,'Result from '));
+    head.appendChild(h('code',{style:{color:'var(--purple)',fontSize:'11px'}},'grep_search'));
+    head.appendChild(h('span',{className:'tc-badge',style:{background:impl.color+'15',color:impl.color,border:'1px solid '+impl.color+'30'}},impl.icon+' '+impl.name));
+    head.appendChild(h('span',{style:{marginLeft:'auto',fontFamily:'monospace',fontWeight:700,color:'var(--green)',fontSize:'12px'}},fmt(result.elapsed)));
+  }
+
+  // Add result lines
+  if (result.preview) {
+    const lines = h('div',{className:'tc-lines'});
+    result.preview.forEach(line => {
+      const p = line.split(':');
+      const row = h('div',{className:'tc-line'});
+      row.appendChild(h('span',{className:'tc-f'},p[0]?.split('/').pop()||''));
+      row.appendChild(h('span',{className:'tc-n'},p[1]||''));
+      row.appendChild(h('span',{className:'tc-c'},p.slice(2).join(':')));
+      lines.appendChild(row);
+    });
+    card.appendChild(lines);
+  }
+
+  // Add stats
+  card.appendChild(h('div',{className:'tc-stats'},
+    h('span',null,h('b',null,String(result.matchCount)),' matches'),
+    h('span',null,h('b',null,String(result.bytes)),' bytes'),
+    h('span',null,h('b',null,'~'+Math.ceil(result.bytes/4)),' tokens'),
+  ));
+
+  const msgArea = document.getElementById('chat-messages');
+  if (msgArea) msgArea.scrollTop = msgArea.scrollHeight;
+}
+
+let chatTextTimer = null;
+let chatPendingText = null;
+
+function chatAppendText(text) {
+  if (!liveChatEl) return;
+  if (!liveBubbleEl) {
+    liveBubbleEl = h('div',{className:'bubble'});
+    if (liveStatusEl && liveStatusEl.parentNode === liveChatEl) {
+      liveChatEl.insertBefore(liveBubbleEl, liveStatusEl);
+    } else {
+      liveChatEl.appendChild(liveBubbleEl);
+    }
+  }
+  // Throttle text updates to avoid layout thrashing
+  chatPendingText = text;
+  if (chatTextTimer) return;
+  chatTextTimer = setTimeout(() => {
+    chatTextTimer = null;
+    if (chatPendingText !== null) {
+      liveBubbleEl.textContent = chatPendingText;
+      chatPendingText = null;
+      const msgArea = document.getElementById('chat-messages');
+      if (msgArea) msgArea.scrollTop = msgArea.scrollHeight;
+    }
+  }, 80);
+}
+
+function chatFinish(stats) {
+  if (!liveChatEl) return;
+  // Flush pending text
+  if (chatTextTimer) { clearTimeout(chatTextTimer); chatTextTimer = null; }
+  if (chatPendingText !== null && liveBubbleEl) { liveBubbleEl.textContent = chatPendingText; chatPendingText = null; }
+  // Remove status
+  if (liveStatusEl) { liveStatusEl.remove(); liveStatusEl = null; }
+  // Add stats bar
+  if (stats) {
+    const costStr = stats.cost != null ? '$'+stats.cost.toFixed(6) : '';
+    liveStatsEl = h('div',{className:'stats anim'},
+      h('span',null,fmt(stats.totalMs)+' total'), h('span',null,stats.toolCalls+' calls'),
+      h('span',null,stats.mcpMs+'ms MCP'), h('span',null,stats.inTokens+'+'+stats.outTokens+' tok'),
+      costStr ? h('span',{style:{color:'var(--green)',fontWeight:600}},costStr) : null,
+    );
+    liveChatEl.appendChild(liveStatsEl);
+  }
+  liveChatEl = null;
+  liveBubbleEl = null;
+  liveToolEls = [];
+}
+
+function updateChatMessages() {
+  // Only used for initial render / tab switch — not during streaming
+  const msgArea = document.getElementById('chat-messages');
+  if (!msgArea) return;
+  msgArea.innerHTML = '';
+  msgArea.appendChild(buildMsgList());
+  setTimeout(()=>{ msgArea.scrollTop = msgArea.scrollHeight; },50);
+  updateSendBtn();
+}
+
+function updateSendBtn() {
+  const btn = document.getElementById('send-btn');
+  if (!btn) return;
+  const active = state.input.trim() && !state.sending;
+  btn.style.background = active ? 'var(--fg)' : 'var(--bg3)';
+  btn.style.color = active ? 'var(--bg)' : 'var(--fg3)';
+  btn.innerHTML = '';
+  btn.appendChild(state.sending ? h('span',{className:'spinner'}) : document.createTextNode('↑'));
+  if (chatInput) chatInput.disabled = state.sending;
+}
+
+function renderChat() {
+  const main = h('div',{className:'main'});
+
+  // Messages area
+  const msgArea = h('div',{id:'chat-messages',className:'messages'});
+  msgArea.appendChild(buildMsgList());
+  main.appendChild(msgArea);
+  setTimeout(()=>{ msgArea.scrollTop = msgArea.scrollHeight; },50);
+
+  // Input - created once, never destroyed
+  const inputArea = h('div',{className:'input-area'});
+  const wrap = h('div',{className:'input-wrap'});
+
+  chatInput = document.createElement('textarea');
+  chatInput.rows = 1;
+  chatInput.placeholder = 'Ask AI...';
+  chatInput.value = state.input;
+  chatInput.addEventListener('input', e => {
+    state.input = e.target.value;
+    e.target.style.height = 'auto';
+    e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
+    updateSendBtn();
+  });
+  chatInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+
+  const btn = h('button',{id:'send-btn',className:'send-btn',onClick:sendChat},'↑');
+  updateSendBtn();
+
+  wrap.appendChild(chatInput);
+  wrap.appendChild(btn);
+  inputArea.appendChild(wrap);
+  main.appendChild(inputArea);
+
+  setTimeout(() => chatInput.focus(), 100);
+  return main;
+}
+
+async function sendChat() {
+  // Sync from textarea in case state.input is stale
+  if (chatInput) state.input = chatInput.value;
+  if (!state.input.trim() || state.sending) return;
+
+  const content = state.input.trim();
+  state.input = '';
+  if (chatInput) chatInput.value = '';
+  state.sending = true;
+  updateSendBtn();
+
+  // Directly manipulate DOM — no full rebuild
+  chatAddUserMsg(content);
+  chatStartAssistant();
+
+  state.msgs.push({role:'user', content});
+  state.msgs.push({role:'assistant', content:'', toolCalls:[], status:'thinking', stats:null});
+  const last = () => state.msgs[state.msgs.length - 1];
+  let tcs = [], text = '';
+
+  try {
+    const history = state.msgs.filter(m => m.role==='user' || (m.role==='assistant' && m.content)).slice(0,-1).map(m => ({role:m.role, content:m.content}));
+
+    const response = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: content, model: state.model, impl: state.impl, history }),
+    });
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (!done) buffer += decoder.decode(value, { stream: true });
+      else buffer += decoder.decode();
+
+      const lines = buffer.split('\n');
+      buffer = done ? '' : lines.pop();
+
+      let eventType = null;
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith('data: ') && eventType) {
+          try {
+            const d = JSON.parse(line.slice(6));
+            if (eventType === 'status') { last().status = d.type; chatUpdateStatus(d.type); }
+            else if (eventType === 'tool_call') { tcs.push({name:d.name,args:d.args,impl:d.impl,result:null}); last().toolCalls=[...tcs]; chatAddToolCall(d); chatUpdateStatus('searching'); }
+            else if (eventType === 'tool_result') { for(let i=tcs.length-1;i>=0;i--){if(!tcs[i].result){tcs[i].result={elapsed:d.elapsed,bytes:d.bytes,matchCount:d.matchCount,preview:d.preview};break;}} last().toolCalls=[...tcs]; chatUpdateToolResult(d); chatUpdateStatus('thinking'); }
+            else if (eventType === 'text_delta') { text+=d.content; last().content=text; chatUpdateStatus(null); chatAppendText(text); }
+            else if (eventType === 'text_done') { last().content=d.content; last().stats=d.stats; if(d.stats?.sessionCost) state.sessionCost=d.stats.sessionCost; chatUpdateStatus(null); chatAppendText(d.content); chatFinish(d.stats); refreshNav(); }
+            else if (eventType === 'error') { last().content='Error: '+(d.message||'Unknown'); chatUpdateStatus(null); chatAppendText('Error: '+(d.message||'Unknown')); chatFinish(null); }
+          } catch(parseErr) { /* skip */ }
+          eventType = null;
+        }
+      }
+      if (done) break;
+    }
+  } catch (err) {
+    last().content = last().content || 'Error: ' + err.message;
+    chatAppendText(last().content);
+    chatFinish(null);
+  }
+
+  state.sending = false;
+  updateSendBtn();
+}
+
+// ═══ SEARCH TAB — instant results, optional AI analysis ═══
+let searchInput = null;
+let searchPathInput = null;
+let searchState = { pattern:'', path:'/Users/bigneek/mcp-grep-bench/test-corpus/large', repoUrl:'', results:null, analyzing:false, analysis:'', impl:'cpp' };
+
+function renderSearch() {
+  const main = h('div',{style:{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden'}});
+
+  // Top section — search controls
+  const top = h('div',{style:{padding:'20px 24px',flexShrink:0,borderBottom:'1px solid var(--border)'}});
+  top.appendChild(h('h2',{style:{fontSize:'16px',fontWeight:700,marginBottom:'2px'}},'Milli-Search'));
+  top.appendChild(h('p',{style:{fontSize:'12px',color:'var(--fg3)',marginBottom:'14px'}},'Ripgrep at wire speed — sub-100ms results. No LLM delay. Click "Analyze" to get AI summary.'));
+
+  // Search row
+  const row = h('div',{style:{display:'flex',gap:'8px',marginBottom:'10px'}});
+  searchInput = document.createElement('input');
+  searchInput.className = 'sinput';
+  searchInput.placeholder = 'Search pattern (regex)...';
+  searchInput.value = searchState.pattern;
+  searchInput.style.flex = '1';
+  searchInput.addEventListener('input', e => { searchState.pattern = e.target.value; });
+  searchInput.addEventListener('keydown', e => { if(e.key==='Enter') runDirectSearch(); });
+
+  searchPathInput = document.createElement('input');
+  searchPathInput.className = 'sinput';
+  searchPathInput.placeholder = '/path or github URL...';
+  searchPathInput.value = searchState.repoUrl || searchState.path;
+  searchPathInput.style.cssText = 'width:280px;font-size:11px;';
+  searchPathInput.addEventListener('input', e => {
+    const v = e.target.value;
+    if (v.includes('github.com')) searchState.repoUrl = v;
+    else { searchState.path = v; searchState.repoUrl = ''; }
+  });
+
+  const btn = h('button',{className:'sbtn',onClick:runDirectSearch},'Search');
+  row.append(searchInput, searchPathInput, btn);
+  top.appendChild(row);
+
+  // Presets
+  const presets = h('div',{style:{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}});
+  [['TODO','TODO'],['Errors','error|Error'],['Functions','def |fn |func '],['Classes','class\\s+\\w+'],['Imports','import|use\\s|from '],['Config','Config|config'],['Panic/Raise','panic|raise|throw']].forEach(([label,pat]) => {
+    presets.appendChild(h('button',{className:'pre',onClick:()=>{searchState.pattern=pat;searchInput.value=pat;runDirectSearch();}},label));
+  });
+  top.appendChild(presets);
+
+  // Server selector
+  const implRow = h('div',{style:{display:'flex',gap:'6px',alignItems:'center'}});
+  implRow.appendChild(h('span',{style:{fontSize:'11px',color:'var(--fg3)'}},'Server:'));
+  Object.entries(IMPLS).forEach(([id,impl]) => {
+    const active = searchState.impl === id;
+    implRow.appendChild(h('button',{style:{fontSize:'11px',padding:'3px 10px',borderRadius:'6px',border:'1px solid '+(active?impl.color:'var(--border)'),background:active?impl.color+'15':'none',color:active?impl.color:'var(--fg3)',cursor:'pointer'},onClick:()=>{searchState.impl=id;currentTab=null;render();}},impl.icon+' '+impl.name));
+  });
+  top.appendChild(implRow);
+  main.appendChild(top);
+
+  // Results area
+  const resultsArea = h('div',{id:'search-results',style:{flex:1,overflowY:'auto',padding:'0'}});
+
+  if (searchState.results) {
+    renderSearchResults(resultsArea);
+  } else {
+    resultsArea.appendChild(h('div',{style:{textAlign:'center',color:'var(--fg3)',paddingTop:'80px',fontSize:'14px'}},'Type a pattern and hit Enter — results in milliseconds'));
+  }
+
+  main.appendChild(resultsArea);
+  setTimeout(()=>searchInput.focus(),100);
+  return main;
+}
+
+function renderSearchResults(container) {
+  const r = searchState.results;
+  if (!r) return;
+  container.innerHTML = '';
+
+  const impl = IMPLS[r.impl] || IMPLS.cpp;
+
+  // Stats bar
+  const statsBar = h('div',{style:{display:'flex',alignItems:'center',gap:'12px',padding:'10px 24px',borderBottom:'1px solid var(--border)',fontSize:'12px',background:'var(--bg2)'}});
+  statsBar.appendChild(h('span',{style:{color:'var(--green)',fontWeight:700,fontFamily:'monospace',fontSize:'14px'}},fmt(r.elapsed)));
+  statsBar.appendChild(h('span',{style:{color:'var(--fg2)'}},r.matchCount+' matches'));
+  statsBar.appendChild(h('span',{style:{color:'var(--fg3)'}},r.bytes+' bytes'));
+  statsBar.appendChild(h('span',{style:{color:'var(--fg3)'}},'~'+Math.ceil(r.bytes/4)+' tokens'));
+  statsBar.appendChild(h('span',{style:{color:impl.color,fontWeight:600}},impl.icon+' '+impl.name));
+  // Analyze button
+  statsBar.appendChild(h('span',{style:{flex:1}}));
+  const analyzeBtn = h('button',{style:{padding:'4px 14px',borderRadius:'8px',border:'1px solid var(--border)',background:'var(--bg3)',color:'var(--fg)',fontSize:'11px',cursor:'pointer',fontWeight:600},onClick:runAnalysis},
+    searchState.analyzing ? 'Analyzing...' : '✨ Analyze with AI');
+  statsBar.appendChild(analyzeBtn);
+  container.appendChild(statsBar);
+
+  // AI Analysis area (if present)
+  if (searchState.analysis) {
+    const analysisDiv = h('div',{id:'search-analysis',style:{padding:'12px 24px',borderBottom:'1px solid var(--border)',background:'var(--bg2)',fontSize:'13px',lineHeight:'1.6',whiteSpace:'pre-wrap',color:'var(--fg2)'}});
+    analysisDiv.appendChild(h('div',{style:{fontSize:'10px',color:'var(--fg3)',marginBottom:'6px',textTransform:'uppercase',letterSpacing:'1px',fontWeight:600}},'AI Analysis'));
+    analysisDiv.appendChild(document.createTextNode(searchState.analysis));
+    container.appendChild(analysisDiv);
+  }
+
+  // Code results
+  const code = h('div',{style:{fontSize:'12px',fontFamily:'monospace'}});
+  r.lines.forEach((line, i) => {
+    const p = line.split(':');
+    const file = (p[0]||'').split('/').pop()||'';
+    const num = p[1]||'';
+    const content = p.slice(2).join(':');
+    const row = h('div',{style:{display:'flex',padding:'2px 24px',borderBottom:'1px solid rgba(255,255,255,0.02)',transition:'background 0.1s'}});
+    row.addEventListener('mouseenter',()=>row.style.background='rgba(255,255,255,0.03)');
+    row.addEventListener('mouseleave',()=>row.style.background='');
+    row.appendChild(h('span',{style:{color:'var(--fg3)',width:'30px',textAlign:'right',marginRight:'12px',flexShrink:0,fontSize:'10px',paddingTop:'2px'}},String(i+1)));
+    row.appendChild(h('span',{style:{color:'var(--purple)',width:'130px',flexShrink:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},file));
+    row.appendChild(h('span',{style:{color:'var(--fg3)',width:'45px',textAlign:'right',marginRight:'10px',flexShrink:0}},num));
+    row.appendChild(h('span',{style:{color:'var(--fg)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},content));
+    code.appendChild(row);
+  });
+  container.appendChild(code);
+}
+
+async function runDirectSearch() {
+  if (!searchState.pattern.trim()) return;
+  // Show F1 loading animation
+  const area = document.getElementById('search-results');
+  if (area) {
+    area.innerHTML = '<div style="padding:40px 24px;text-align:center">' +
+      '<div class="f1-loader fast" style="width:200px;margin:0 auto 16px"></div>' +
+      '<div style="display:flex;align-items:center;justify-content:center;gap:8px;color:var(--green);font-size:13px;font-weight:600">' +
+      '<span class="f1-dots"><span></span><span></span><span></span><span></span></span>' +
+      ' Milli-speed search' +
+      '</div>' +
+      '<div style="color:var(--fg3);font-size:11px;margin-top:6px">ripgrep → ' + (IMPLS[searchState.impl]?.icon||'') + ' ' + (IMPLS[searchState.impl]?.name||'') + ' MCP server</div>' +
+      '</div>';
+  }
+
+  // Handle GitHub URL — clone first
+  let searchPath = searchState.path;
+  if (searchState.repoUrl) {
+    const parsed = searchState.repoUrl.match(/github\.com\/([^\/\s]+\/[^\/\s]+)/);
+    if (parsed) {
+      if (area) {
+        area.innerHTML = '<div style="padding:40px 24px;text-align:center">' +
+          '<div class="f1-loader" style="width:240px;margin:0 auto 16px"></div>' +
+          '<div style="color:var(--fg2);font-size:13px;font-weight:500">Cloning ' + parsed[1] + '...</div>' +
+          '<div style="color:var(--fg3);font-size:11px;margin-top:4px">This may take a few seconds for new repos</div></div>';
+      }
+      try {
+        const resp = await fetch('/api/clone', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({repo:parsed[1]}) });
+        const d = await resp.json();
+        if (d.path) searchPath = d.path;
+      } catch {}
+      // Switch back to search animation
+      if (area) {
+        area.innerHTML = '<div style="padding:40px 24px;text-align:center">' +
+          '<div class="f1-loader fast" style="width:200px;margin:0 auto 16px"></div>' +
+          '<div style="color:var(--green);font-size:13px;font-weight:600"><span class="f1-dots"><span></span><span></span><span></span><span></span></span> Searching cloned repo</div></div>';
+      }
+    }
+  }
+
+  searchState.analysis = '';
+  searchState.analyzing = false;
+  const resp = await fetch('/api/search/direct', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ pattern:searchState.pattern, path:searchPath, impl:searchState.impl, max_results:200 }),
+  });
+  searchState.results = await resp.json();
+
+  const resultsEl = document.getElementById('search-results');
+  if (resultsEl) renderSearchResults(resultsEl);
+}
+
+async function runAnalysis() {
+  if (!searchState.results || searchState.analyzing) return;
+  searchState.analyzing = true;
+
+  // Re-render to show "Analyzing..." button
+  const analyzeArea = document.getElementById('search-results');
+  if (analyzeArea) renderSearchResults(analyzeArea);
+
+  try {
+    const resp = await fetch('/api/search/analyze', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        pattern: searchState.results.pattern,
+        results: searchState.results.lines.slice(0, 50).join('\n'),
+        model: state.model,
+      }),
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '', text = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (!done) buffer += decoder.decode(value, { stream:true });
+      else buffer += decoder.decode();
+      const lines = buffer.split('\n');
+      buffer = done ? '' : lines.pop();
+      let evt = null;
+      for (const line of lines) {
+        if (line.startsWith('event: ')) evt = line.slice(7).trim();
+        else if (line.startsWith('data: ') && evt) {
+          try {
+            const d = JSON.parse(line.slice(6));
+            if (evt === 'text_delta') {
+              text += d.content;
+              searchState.analysis = text;
+              const el = document.getElementById('search-analysis');
+              if (el) el.lastChild.textContent = text;
+              else { const a2 = document.getElementById('search-results'); if (a2) renderSearchResults(a2); }
+            }
+            if (evt === 'text_done') { searchState.analysis = d.content; if(d.cost) state.sessionCost += d.cost; refreshNav(); }
+          } catch {}
+          evt = null;
+        }
+      }
+      if (done) break;
+    }
+  } catch (err) {
+    searchState.analysis = 'Error: ' + err.message;
+  }
+  searchState.analyzing = false;
+  const finalArea = document.getElementById('search-results');
+  if (finalArea) renderSearchResults(finalArea);
+}
+
+// Compare state
+let compareInput = null;
+let cmpState = { input: '', sending: false, userMsg: '', results: {} };
+
+function renderCompare() {
+  const div = h('div',{style:{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden'}});
+
+  // Header
+  const header = h('div',{style:{padding:'16px 24px 12px',flexShrink:0,borderBottom:'1px solid var(--border)'}});
+  header.appendChild(h('h2',{style:{fontSize:'16px',fontWeight:700,marginBottom:'4px'}},'Compare — All 4 Servers'));
+  header.appendChild(h('p',{style:{fontSize:'12px',color:'var(--fg3)',marginBottom:'12px'}},'Same prompt runs through all MCP servers simultaneously. Clone repos, search code, compare results.'));
+  const chips = h('div',{style:{display:'flex',flexWrap:'wrap',gap:'6px'}});
+  [
+    ['Clone picoclaw, find tools','Clone https://github.com/sipeed/picoclaw and find all tool definitions'],
+    ['Clone openscreen, find funcs','Clone https://github.com/siddharthvaddem/openscreen and search for all function definitions'],
+    ['TODOs in large codebase','Find all TODO comments in the large codebase'],
+    ['Error patterns in Go','Search the large codebase for error handling patterns'],
+  ].forEach(([label,prompt]) => {
+    chips.appendChild(h('button',{className:'pre',onClick:()=>{ cmpState.input=prompt; if(compareInput) compareInput.value=prompt; }},label));
+  });
+  header.appendChild(chips);
+  div.appendChild(header);
+
+  // Results area
+  const resultsArea = h('div',{id:'compare-results',style:{flex:1,overflowY:'auto',padding:'16px 24px'}});
+
+  if (cmpState.userMsg) {
+    resultsArea.appendChild(h('div',{style:{marginBottom:'16px',padding:'10px 14px',background:'var(--fg)',color:'var(--bg)',borderRadius:'12px',maxWidth:'70%',marginLeft:'auto',fontSize:'14px'}},cmpState.userMsg));
+  }
+
+  if (Object.keys(cmpState.results).length > 0) {
+    const grid = h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px'}});
+    Object.entries(IMPLS).forEach(([id, impl]) => {
+      const r = cmpState.results[id];
+      const card = h('div',{className:'rcard anim',style:{borderColor:r?.fastest?'var(--green)':'var(--border)'}});
+      // Header
+      const hd = h('div',{className:'rhead',style:{borderTop:'2px solid '+impl.color}});
+      hd.appendChild(h('span',{style:{fontSize:'12px',fontWeight:600,color:impl.color}},impl.icon+' '+impl.name));
+      if(r?.stats) { hd.appendChild(h('span',{style:{fontSize:'11px',fontFamily:'monospace',color:r.fastest?'var(--green)':'var(--fg3)',marginLeft:'8px'}},fmt(r.stats.totalMs))); hd.appendChild(h('span',{style:{marginLeft:'auto',fontSize:'10px',color:'var(--fg3)'}},r.stats.inTokens+'+'+r.stats.outTokens+' tok')); }
+      if(r?.stats?.cost) hd.appendChild(h('span',{style:{fontSize:'10px',fontWeight:600,color:'var(--green)',marginLeft:'6px'}},'$'+r.stats.cost.toFixed(5)));
+      if(r?.fastest) hd.appendChild(h('span',{style:{fontSize:'10px',fontWeight:700,color:'var(--green)',marginLeft:'6px'}},'FASTEST'));
+      card.appendChild(hd);
+
+      // Body
+      const body = h('div',{style:{padding:'10px',maxHeight:'350px',overflowY:'auto'}});
+      if(!r) { body.appendChild(h('div',{style:{color:'var(--fg3)',fontSize:'12px',textAlign:'center',padding:'30px'}},'Waiting...')); }
+      else if(r.status) { body.appendChild(h('div',{style:{display:'flex',alignItems:'center',gap:'8px',color:'var(--fg3)',fontSize:'12px',padding:'20px',justifyContent:'center'}},h('span',{className:'spinner'}),r.status==='searching'?'Searching...':'Thinking...')); }
+      else {
+        (r.toolCalls||[]).forEach(tc => {
+          const tcEl = h('div',{style:{marginBottom:'8px',border:'1px solid var(--bg3)',borderRadius:'8px',overflow:'hidden'}});
+          tcEl.appendChild(h('div',{style:{padding:'4px 8px',background:'rgba(0,0,0,0.2)',color:'var(--fg2)',display:'flex',alignItems:'center',gap:'6px',fontSize:'11px'}},
+            h('span',{style:{color:impl.color}},impl.icon),
+            h('code',{style:{color:'var(--purple)'}},'grep_search'),
+            tc.result?h('span',{style:{marginLeft:'auto',color:'var(--green)',fontFamily:'monospace',fontWeight:600,fontSize:'10px'}},fmt(tc.result.elapsed)+' · '+tc.result.matchCount+' hits'):h('span',{className:'spinner'}),
+          ));
+          if(tc.result?.preview) { const ls=h('div',{style:{maxHeight:'100px',overflowY:'auto',fontSize:'11px',fontFamily:'monospace'}}); tc.result.preview.slice(0,6).forEach(l=>{const p=l.split(':');ls.appendChild(h('div',{className:'tc-line'},h('span',{className:'tc-f'},p[0]?.split('/').pop()||''),h('span',{className:'tc-n'},p[1]||''),h('span',{className:'tc-c'},p.slice(2).join(':'))));});tcEl.appendChild(ls); }
+          body.appendChild(tcEl);
+        });
+        if(r.content) body.appendChild(h('div',{style:{fontSize:'12px',lineHeight:'1.5',whiteSpace:'pre-wrap',color:'var(--fg2)',marginTop:'6px'}},r.content.slice(0,500)+(r.content.length>500?'...':'')));
+      }
+      card.appendChild(body);
+      grid.appendChild(card);
+    });
+    resultsArea.appendChild(grid);
+  } else if(!cmpState.userMsg) {
+    resultsArea.appendChild(h('div',{style:{textAlign:'center',color:'var(--fg3)',paddingTop:'60px',fontSize:'14px'}},'Send a message to race all 4 servers'));
+  }
+  div.appendChild(resultsArea);
+
+  // Input
+  const inputArea = h('div',{style:{padding:'12px 24px 16px',borderTop:'1px solid var(--border)',flexShrink:0}});
+  const wrap = h('div',{style:{position:'relative'}});
+  compareInput = document.createElement('textarea');
+  compareInput.rows = 1;
+  compareInput.placeholder = 'Ask all 4 servers simultaneously...';
+  compareInput.value = cmpState.input;
+  compareInput.style.cssText = 'width:100%;resize:none;border-radius:12px;border:1px solid var(--border);background:var(--bg2);padding:12px 56px 12px 16px;font-size:14px;color:var(--fg);outline:none;font-family:inherit;line-height:1.5;';
+  compareInput.addEventListener('input', e => { cmpState.input=e.target.value; e.target.style.height='auto'; e.target.style.height=Math.min(e.target.scrollHeight,120)+'px'; });
+  compareInput.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendCompare();} });
+  compareInput.addEventListener('focus', e => e.target.style.borderColor='var(--purple)');
+  compareInput.addEventListener('blur', e => e.target.style.borderColor='var(--border)');
+  const active = cmpState.input.trim()&&!cmpState.sending;
+  const btn = h('button',{style:{position:'absolute',right:'8px',top:'8px',width:'36px',height:'36px',borderRadius:'10px',border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',background:active?'var(--fg)':'var(--bg3)',color:active?'var(--bg)':'var(--fg3)'},onClick:sendCompare},
+    cmpState.sending?h('span',{className:'spinner'}):'↑');
+  wrap.appendChild(compareInput);
+  wrap.appendChild(btn);
+  inputArea.appendChild(wrap);
+  div.appendChild(inputArea);
+  setTimeout(()=>compareInput.focus(),100);
+  return div;
+}
+
+// Throttled compare update — max 4 updates/sec to avoid jank
+let cmpUpdateTimer = null;
+let cmpNeedsUpdate = false;
+
+function scheduleCompareUpdate() {
+  cmpNeedsUpdate = true;
+  if (cmpUpdateTimer) return;
+  cmpUpdateTimer = setTimeout(() => {
+    cmpUpdateTimer = null;
+    if (cmpNeedsUpdate) { cmpNeedsUpdate = false; doCompareUpdate(); }
+  }, 250);
+}
+
+function renderCardHTML(implId) {
+  const impl = IMPLS[implId];
+  const r = cmpState.results[implId];
+  let html = '';
+
+  // Status/loading
+  if (!r || r.status) {
+    const label = r?.status === 'searching' ? 'Searching files...' : 'Thinking...';
+    html += '<div style="display:flex;align-items:center;gap:8px;color:var(--fg3);font-size:12px;padding:20px;justify-content:center"><span class="spinner"></span>'+label+'</div>';
+  } else {
+    // Tool calls
+    (r.toolCalls||[]).forEach(tc => {
+      html += '<div style="margin-bottom:8px;border:1px solid var(--bg3);border-radius:8px;overflow:hidden">';
+      html += '<div style="padding:4px 8px;background:rgba(0,0,0,0.2);color:var(--fg2);display:flex;align-items:center;gap:6px;font-size:11px">';
+      html += '<span style="color:'+impl.color+'">'+impl.icon+'</span>';
+      html += '<code style="color:var(--purple)">grep_search</code>';
+      if (tc.result) {
+        html += '<span style="margin-left:auto;color:var(--green);font-family:monospace;font-weight:600;font-size:10px">'+fmt(tc.result.elapsed)+' · '+tc.result.matchCount+' hits</span>';
+      } else {
+        html += '<span class="spinner" style="margin-left:auto"></span>';
+      }
+      html += '</div>';
+      if (tc.result?.preview) {
+        html += '<div style="max-height:100px;overflow-y:auto;font-size:11px;font-family:monospace">';
+        tc.result.preview.slice(0,6).forEach(l => {
+          const p = l.split(':');
+          const f = (p[0]||'').split('/').pop()||'';
+          const n = p[1]||'';
+          const c = p.slice(2).join(':').replace(/</g,'&lt;');
+          html += '<div class="tc-line"><span class="tc-f">'+f+'</span><span class="tc-n">'+n+'</span><span class="tc-c">'+c+'</span></div>';
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+    // Text content
+    if (r.content) {
+      const safe = r.content.slice(0,600).replace(/</g,'&lt;').replace(/\n/g,'<br>') + (r.content.length>600?'...':'');
+      html += '<div style="font-size:12px;line-height:1.5;color:var(--fg2);margin-top:6px">'+safe+'</div>';
+    }
+  }
+  return html;
+}
+
+function renderCardHeaderHTML(implId) {
+  const impl = IMPLS[implId];
+  const r = cmpState.results[implId];
+  let html = '<span style="font-size:12px;font-weight:600;color:'+impl.color+'">'+impl.icon+' '+impl.name+'</span>';
+  if (r?.stats) {
+    const col = r.fastest ? 'var(--green)' : 'var(--fg3)';
+    html += '<span style="font-size:11px;font-family:monospace;color:'+col+';margin-left:4px">'+fmt(r.stats.totalMs)+'</span>';
+    html += '<span style="margin-left:auto;font-size:10px;color:var(--fg3)">'+r.stats.inTokens+'+'+r.stats.outTokens+' tok</span>';
+    if (r.stats.cost) html += '<span style="font-size:10px;font-weight:600;color:var(--green);margin-left:6px">$'+r.stats.cost.toFixed(5)+'</span>';
+  }
+  if (r?.fastest) html += '<span style="font-size:10px;font-weight:700;color:var(--green);margin-left:6px">FASTEST</span>';
+  return html;
+}
+
+function initCompareGrid() {
+  const area = document.getElementById('compare-results');
+  if (!area) return;
+  area.innerHTML = '';
+  if (cmpState.userMsg) {
+    area.innerHTML = '<div style="margin-bottom:16px;padding:10px 14px;background:var(--fg);color:var(--bg);border-radius:12px;max-width:70%;margin-left:auto;font-size:14px">'+cmpState.userMsg.replace(/</g,'&lt;')+'</div>';
+  }
+  let gridHTML = '<div id="compare-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">';
+  Object.entries(IMPLS).forEach(([id, impl]) => {
+    gridHTML += '<div id="cmp-card-'+id+'" style="border-radius:12px;border:1px solid var(--border);overflow:hidden;background:var(--bg2);transition:border-color 0.3s">';
+    gridHTML += '<div id="cmp-head-'+id+'" style="display:flex;align-items:center;gap:6px;padding:8px 12px;border-bottom:1px solid var(--bg3);border-top:2px solid '+impl.color+'">'+renderCardHeaderHTML(id)+'</div>';
+    gridHTML += '<div id="cmp-body-'+id+'" style="padding:10px;max-height:350px;overflow-y:auto">'+renderCardHTML(id)+'</div>';
+    gridHTML += '</div>';
+  });
+  gridHTML += '</div>';
+  area.innerHTML += gridHTML;
+}
+
+function doCompareUpdate() {
+  if (!document.getElementById('compare-grid')) {
+    initCompareGrid();
+    return;
+  }
+  Object.keys(IMPLS).forEach(id => {
+    const r = cmpState.results[id];
+    const card = document.getElementById('cmp-card-'+id);
+    if (!card) return;
+    card.style.borderColor = r?.fastest ? 'var(--green)' : 'var(--border)';
+    const head = document.getElementById('cmp-head-'+id);
+    if (head) head.innerHTML = renderCardHeaderHTML(id);
+    const body = document.getElementById('cmp-body-'+id);
+    if (body) body.innerHTML = renderCardHTML(id);
+  });
+}
+
+function updateCompareResults() {
+  scheduleCompareUpdate();
+}
+
+async function sendCompare() {
+  if(compareInput) cmpState.input = compareInput.value;
+  if(!cmpState.input.trim()||cmpState.sending) return;
+  const content = cmpState.input.trim();
+  cmpState.userMsg = content;
+  cmpState.input = '';
+  if(compareInput) compareInput.value = '';
+  cmpState.sending = true;
+  cmpState.results = {};
+  Object.keys(IMPLS).forEach(id => { cmpState.results[id] = {status:'thinking',content:'',toolCalls:[],stats:null,done:false,fastest:false}; });
+  updateCompareResults();
+
+  let completedCount = 0;
+  const completionTimes = {};
+  const implIds = Object.keys(IMPLS);
+
+  const delay = (ms) => new Promise(r => setTimeout(r, ms));
+  await Promise.all(implIds.map(async (implId, idx) => {
+    await delay(idx * 1500); // stagger 1.5s apart to avoid rate limiting
+    try {
+      const response = await fetch('/api/chat/stream', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({message:content, model:state.model, impl:implId, history:[]}),
+      });
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer='', tcs=[], text='';
+      while(true) {
+        const {done,value} = await reader.read();
+        if(!done) buffer+=decoder.decode(value,{stream:true}); else buffer+=decoder.decode();
+        const lines=buffer.split('\n'); buffer=done?'':lines.pop();
+        let evt=null;
+        for(const line of lines) {
+          if(line.startsWith('event: ')) evt=line.slice(7).trim();
+          else if(line.startsWith('data: ')&&evt) {
+            try {
+              const d=JSON.parse(line.slice(6));
+              if(evt==='status'){cmpState.results[implId].status=d.type;updateCompareResults();}
+              else if(evt==='tool_call'){tcs.push({name:d.name,args:d.args,impl:implId,result:null});cmpState.results[implId].toolCalls=[...tcs];cmpState.results[implId].status='searching';updateCompareResults();}
+              else if(evt==='tool_result'){for(let i=tcs.length-1;i>=0;i--){if(!tcs[i].result){tcs[i].result={elapsed:d.elapsed,bytes:d.bytes,matchCount:d.matchCount,preview:d.preview};break;}}cmpState.results[implId].toolCalls=[...tcs];cmpState.results[implId].status='thinking';updateCompareResults();}
+              else if(evt==='text_delta'){text+=d.content;cmpState.results[implId].content=text;cmpState.results[implId].status=null;updateCompareResults();}
+              else if(evt==='text_done'){
+                cmpState.results[implId].content=d.content;cmpState.results[implId].stats=d.stats;cmpState.results[implId].status=null;cmpState.results[implId].done=true;
+                completionTimes[implId]=d.stats?.totalMs||999999;completedCount++;
+                if(completedCount===implIds.length){const fastest=Object.entries(completionTimes).sort((a,b)=>a[1]-b[1])[0][0];cmpState.results[fastest].fastest=true;}
+                updateCompareResults();
+              }
+            }catch{}
+            evt=null;
+          }
+        }
+        if(done) break;
+      }
+    } catch(err) {
+      cmpState.results[implId].content='Error: '+err.message;cmpState.results[implId].status=null;cmpState.results[implId].done=true;completedCount++;updateCompareResults();
+    }
+  }));
+  cmpState.sending=false; updateCompareResults();
+}
+
+// Init
+fetch('/api/models').then(r=>r.json()).then(m=>{state.models=m; render();}).catch(()=>render());
+fetch('/api/warmup',{method:'POST'}).then(r=>r.json()).then(s=>{state.ready=Object.values(s).filter(x=>x.ready).length; render();}).catch(()=>{});
+fetch('/api/costs').then(r=>r.json()).then(c=>{if(c.session) state.sessionCost=c.session.totalCost; if(c.account) state.accountCost=c.account.total; refreshNav();}).catch(()=>{});
+render();
+</script>
+</body>
+</html>

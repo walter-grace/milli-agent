@@ -1,0 +1,291 @@
+{
+  "timestamp": "2026-04-05T12:11:02",
+  "system": {
+    "platform": "macOS-26.3-arm64-arm-64bit",
+    "machine": "arm64",
+    "cpu": "Apple M4",
+    "ram_gb": 16,
+    "rg_version": "ripgrep 15.1.0"
+  },
+  "corpus": {
+    "small": {
+      "files": 100
+    },
+    "medium": {
+      "files": 1000
+    },
+    "large": {
+      "files": 5000
+    }
+  },
+  "results": [
+    {
+      "name": "Rust",
+      "binary_size": 387568,
+      "startup_cold_ms": [
+        1.84,
+        1.68,
+        1.69,
+        1.7,
+        1.66
+      ],
+      "startup_cold_avg": 1.71,
+      "startup_warm_ms": [
+        1.57,
+        1.56,
+        1.52,
+        1.49,
+        1.49
+      ],
+      "startup_warm_avg": 1.53,
+      "search_small_ms": [
+        5.1,
+        6.62,
+        5.0
+      ],
+      "search_small_avg": 5.57,
+      "search_medium_ms": [
+        13.81,
+        13.73,
+        12.43
+      ],
+      "search_medium_avg": 13.32,
+      "search_large_ms": [
+        40.27,
+        39.51,
+        38.0
+      ],
+      "search_large_avg": 39.26,
+      "response_bytes": 829,
+      "est_tokens": 207,
+      "est_cost_per_query": 0.003105,
+      "est_cost_per_1000": 3.105,
+      "peak_rss_bytes": 7323648,
+      "peak_rss_mb": 7.0,
+      "workflow_3query_ms": 111.2,
+      "pattern_benchmarks": {
+        "simple_word": {
+          "time_ms": 39.42,
+          "response_bytes": 1769,
+          "est_tokens": 442
+        },
+        "regex_class": {
+          "time_ms": 39.7,
+          "response_bytes": 90,
+          "est_tokens": 22
+        },
+        "regex_func": {
+          "time_ms": 42.31,
+          "response_bytes": 1935,
+          "est_tokens": 483
+        },
+        "case_insensitive": {
+          "time_ms": 39.9,
+          "response_bytes": 3710,
+          "est_tokens": 927
+        }
+      }
+    },
+    {
+      "name": "C++",
+      "binary_size": 41104,
+      "startup_cold_ms": [
+        1.83,
+        1.57,
+        1.5,
+        1.5,
+        1.44
+      ],
+      "startup_cold_avg": 1.57,
+      "startup_warm_ms": [
+        1.33,
+        1.32,
+        1.39,
+        1.36,
+        1.32
+      ],
+      "startup_warm_avg": 1.34,
+      "search_small_ms": [
+        10.56,
+        7.17,
+        10.21
+      ],
+      "search_small_avg": 9.31,
+      "search_medium_ms": [
+        15.12,
+        16.58,
+        15.23
+      ],
+      "search_medium_avg": 15.64,
+      "search_large_ms": [
+        46.85,
+        46.67,
+        46.39
+      ],
+      "search_large_avg": 46.64,
+      "response_bytes": 2328,
+      "est_tokens": 582,
+      "est_cost_per_query": 0.00873,
+      "est_cost_per_1000": 8.73,
+      "peak_rss_bytes": 6782976,
+      "peak_rss_mb": 6.5,
+      "workflow_3query_ms": 130.79,
+      "pattern_benchmarks": {
+        "simple_word": {
+          "time_ms": 45.47,
+          "response_bytes": 5262,
+          "est_tokens": 1315
+        },
+        "regex_class": {
+          "time_ms": 40.24,
+          "response_bytes": 92,
+          "est_tokens": 23
+        },
+        "regex_func": {
+          "time_ms": 40.28,
+          "response_bytes": 92,
+          "est_tokens": 23
+        },
+        "case_insensitive": {
+          "time_ms": 46.56,
+          "response_bytes": 5779,
+          "est_tokens": 1444
+        }
+      }
+    },
+    {
+      "name": "Swift",
+      "binary_size": 63456,
+      "startup_cold_ms": [
+        3.45,
+        2.66,
+        2.63,
+        2.5,
+        2.6
+      ],
+      "startup_cold_avg": 2.77,
+      "startup_warm_ms": [
+        2.65,
+        2.56,
+        2.54,
+        2.5,
+        2.59
+      ],
+      "startup_warm_avg": 2.57,
+      "search_small_ms": [
+        73.2,
+        83.17,
+        85.3
+      ],
+      "search_small_avg": 80.56,
+      "search_medium_ms": [
+        102.96,
+        103.7,
+        107.51
+      ],
+      "search_medium_avg": 104.72,
+      "search_large_ms": [
+        142.97,
+        130.41,
+        121.23
+      ],
+      "search_large_avg": 131.54,
+      "response_bytes": 2486,
+      "est_tokens": 621,
+      "est_cost_per_query": 0.009315,
+      "est_cost_per_1000": 9.315,
+      "peak_rss_bytes": 8765440,
+      "peak_rss_mb": 8.4,
+      "workflow_3query_ms": 345.79,
+      "pattern_benchmarks": {
+        "simple_word": {
+          "time_ms": 120.12,
+          "response_bytes": 5710,
+          "est_tokens": 1427
+        },
+        "regex_class": {
+          "time_ms": 116.8,
+          "response_bytes": 90,
+          "est_tokens": 22
+        },
+        "regex_func": {
+          "time_ms": 122.73,
+          "response_bytes": 5888,
+          "est_tokens": 1472
+        },
+        "case_insensitive": {
+          "time_ms": 129.05,
+          "response_bytes": 6127,
+          "est_tokens": 1531
+        }
+      }
+    },
+    {
+      "name": "Python",
+      "binary_size": 3048,
+      "startup_cold_ms": [
+        21.82,
+        20.23,
+        20.76,
+        20.23,
+        20.07
+      ],
+      "startup_cold_avg": 20.62,
+      "startup_warm_ms": [
+        20.02,
+        20.27,
+        20.34,
+        20.34,
+        20.22
+      ],
+      "startup_warm_avg": 20.24,
+      "search_small_ms": [
+        27.95,
+        26.86,
+        26.59
+      ],
+      "search_small_avg": 27.13,
+      "search_medium_ms": [
+        33.22,
+        35.0,
+        34.88
+      ],
+      "search_medium_avg": 34.37,
+      "search_large_ms": [
+        64.34,
+        66.17,
+        64.73
+      ],
+      "search_large_avg": 65.08,
+      "response_bytes": 2335,
+      "est_tokens": 583,
+      "est_cost_per_query": 0.008745,
+      "est_cost_per_1000": 8.745,
+      "peak_rss_bytes": 14352384,
+      "peak_rss_mb": 13.7,
+      "workflow_3query_ms": 165.75,
+      "pattern_benchmarks": {
+        "simple_word": {
+          "time_ms": 64.02,
+          "response_bytes": 5269,
+          "est_tokens": 1317
+        },
+        "regex_class": {
+          "time_ms": 59.52,
+          "response_bytes": 99,
+          "est_tokens": 24
+        },
+        "regex_func": {
+          "time_ms": 67.59,
+          "response_bytes": 5547,
+          "est_tokens": 1386
+        },
+        "case_insensitive": {
+          "time_ms": 66.27,
+          "response_bytes": 5786,
+          "est_tokens": 1446
+        }
+      }
+    }
+  ]
+}
