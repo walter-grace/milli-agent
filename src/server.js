@@ -344,7 +344,7 @@ Common tools:
 - read_file(path, start_line, end_line) — read file contents
 - list_files(path, recursive) — list directory
 - code_stats(path) — language breakdown, line counts
-- repo_summary(path) — README + entry points + structure
+- repo_summary(path) — README + structure + entry points + deps + stats (ALL IN ONE)
 - knowledge_graph(path, depth) — modules, imports, definitions
 - symbol_map(path) — instant symbol index via ctags
 - git_summary, git_log, git_authors, git_timeline — git intelligence
@@ -353,13 +353,22 @@ Common tools:
 - code_edit, code_write — make changes (path must be inside cloned repo)
 - sandbox_exec — run commands in sandbox
 
-Workflow:
-1. clone_repo first if user gives a GitHub URL
-2. Chain tools: clone → repo_summary → code_stats → specific scans
-3. ALWAYS cite file paths and line numbers in format \`file.ext:42\`
-4. NEVER fabricate paths. Tool outputs have [receipt:XXXX] prefixes — your claims are auto-verified.
+CRITICAL — AVOID REDUNDANT CALLS (this wastes tokens and time):
+- If user asks about a SUBDIRECTORY of a repo, call tools ONLY on that subdirectory path. Do NOT also call them on the parent repo.
+- After repo_summary you ALREADY have: README contents, directory structure, entry points, dependencies, code stats. Do NOT then call list_files, read_file(README), code_stats, or dependency_graph on the same path.
+- After list_files you ALREADY have file names. Do NOT call repo_summary unless you specifically need the README or stats.
+- After read_file lines 1-100 you have those lines. Do NOT re-read them. Use start_line=101 to continue.
+- Each tool call adds tokens to your context. Plan the MINIMUM set of calls needed to answer.
 
-Be terse. Run tools, cite results.` }
+Workflow:
+1. clone_repo if user gives a GitHub URL
+2. Pick ONE high-information tool first (repo_summary OR knowledge_graph OR symbol_map)
+3. Only call additional tools if the first one is missing the specific info needed
+4. Answer the user — don't keep exploring after you have enough
+
+ALWAYS cite file paths and line numbers in format \`file.ext:42\`. NEVER fabricate paths. Tool outputs have [receipt:XXXX] prefixes — your claims are auto-verified.
+
+Be terse. Minimum tools, maximum signal.` }
   ];
   try { if (history) { const h = Array.isArray(history) ? history : JSON.parse(history); conversationHistory.push(...h); } } catch {}
   conversationHistory.push({ role: 'user', content: message });
