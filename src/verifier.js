@@ -99,7 +99,9 @@ export function extractCitations(text) {
   return citations;
 }
 
-export function verifyCitations(citations, ledger, repoRoot = null) {
+export function verifyCitations(citations, ledger, repoRoots = null) {
+  // Accept either a string (single root) or an array of roots, or null.
+  const roots = Array.isArray(repoRoots) ? repoRoots.filter(Boolean) : repoRoots ? [repoRoots] : [];
   const results = {
     total: citations.length,
     verified: 0,
@@ -112,11 +114,13 @@ export function verifyCitations(citations, ledger, repoRoot = null) {
 
   for (const cite of citations) {
     if (cite.type === 'line_ref') {
-      // Try to read the actual file
+      // Try to read the actual file. Order: literal path, then each repo root,
+      // then a few common scratch dirs. The verifier picks the first that exists.
       const candidates = [
         cite.file,
-        repoRoot ? pathResolve(repoRoot, cite.file) : null,
+        ...roots.map(r => pathResolve(r, cite.file)),
         pathResolve('/tmp', cite.file),
+        pathResolve('/tmp/milli-push', cite.file),
       ].filter(Boolean);
 
       let realFile = null;
@@ -352,8 +356,11 @@ export async function verify(responseText, ledger, opts = {}) {
   const t0 = Date.now();
 
   // Phase 1: extract + verify citations (fast, deterministic)
+  // opts.repoRoot can be a string or an array of candidate roots.
+  // opts.repoRoots (plural) is preferred for multi-repo sessions.
   const citations = extractCitations(responseText);
-  const citationResults = verifyCitations(citations, ledger, opts.repoRoot);
+  const roots = opts.repoRoots || opts.repoRoot;
+  const citationResults = verifyCitations(citations, ledger, roots);
 
   // Phase 2: coverage metric (fast)
   const coverage = computeCoverage(responseText, ledger);
@@ -366,23 +373,35 @@ export async function verify(responseText, ledger, opts = {}) {
     judge = await frontierJudge(responseText, ledger, opts);
   }
 
-  // Aggregate trust label
+  // Aggregate trust label.
+  // Verified citations carry more weight than 4-gram coverage — a response
+  // can be 100% grounded with all its facts cited even when the surrounding
+  // prose drives coverage low. Coverage alone is the fallback signal for
+  // responses without explicit citations.
   let label = 'UNKNOWN';
   let score = 0;
 
-  if (citations.length === 0 && coverage.coverage < 0.2) {
+  const verified = citationResults.verified;
+  const fab = citationResults.fabrication_rate;
+  const cov = coverage.coverage;
+
+  if (citations.length === 0 && cov < 0.2) {
     label = 'UNGROUNDED';
     score = 0.1;
-  } else if (citationResults.fabrication_rate > 0.5) {
+  } else if (fab > 0.5) {
     label = 'MOSTLY_HALLUCINATED';
     score = 0.2;
-  } else if (citationResults.fabrication_rate > 0.2) {
+  } else if (fab > 0.2) {
     label = 'PARTIALLY_HALLUCINATED';
     score = 0.4;
-  } else if (coverage.coverage >= 0.7 && citationResults.fabrication_rate === 0) {
+  } else if (verified >= 3 && fab === 0) {
+    // Citation-rich, zero fabrications → trust the citations
     label = 'GROUNDED';
     score = 0.95;
-  } else if (coverage.coverage >= 0.5) {
+  } else if (cov >= 0.7 && fab === 0) {
+    label = 'GROUNDED';
+    score = 0.95;
+  } else if ((verified >= 1 && fab === 0) || cov >= 0.5) {
     label = 'LIKELY_GROUNDED';
     score = 0.75;
   } else {

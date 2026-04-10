@@ -611,6 +611,80 @@ export const SHELL_LINT_TOOL = {
 // Tool Execution
 // ═══════════════════════════════════════════
 
+// ─── Browser tools (chrome-devtools-mcp) ───
+// The LLM sees these in its tool list. The chat endpoint routes them to
+// src/browser-tools.js (async, not via executeTool).
+export const BROWSER_NAVIGATE_TOOL = {
+  type: 'function',
+  function: {
+    name: 'browser_navigate',
+    description: 'Open a URL in the headless Chrome session. Use this before clicking, typing, or screenshotting. The session persists across calls.',
+    parameters: {
+      type: 'object',
+      properties: { url: { type: 'string', description: 'Full URL including protocol' } },
+      required: ['url'],
+    },
+  },
+};
+export const BROWSER_SNAPSHOT_TOOL = {
+  type: 'function',
+  function: {
+    name: 'browser_snapshot',
+    description: 'Get an accessibility-tree snapshot of the current page. Returns text describing every element with stable uid selectors. Use this to find buttons/inputs to click.',
+    parameters: { type: 'object', properties: {} },
+  },
+};
+export const BROWSER_SCREENSHOT_TOOL = {
+  type: 'function',
+  function: {
+    name: 'browser_screenshot',
+    description: 'Take a PNG screenshot of the current page. Saves to /tmp/milli-shots/ and returns the file path.',
+    parameters: { type: 'object', properties: {} },
+  },
+};
+export const BROWSER_CLICK_TOOL = {
+  type: 'function',
+  function: {
+    name: 'browser_click',
+    description: 'Click an element. Pass either the uid from browser_snapshot or a CSS selector.',
+    parameters: {
+      type: 'object',
+      properties: {
+        uid: { type: 'string', description: 'Element uid from browser_snapshot (preferred)' },
+        selector: { type: 'string', description: 'CSS selector (fallback)' },
+      },
+    },
+  },
+};
+export const BROWSER_TYPE_TOOL = {
+  type: 'function',
+  function: {
+    name: 'browser_type',
+    description: 'Type text into a focused element or one identified by uid/selector.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string' },
+        uid: { type: 'string', description: 'Element uid from browser_snapshot' },
+        selector: { type: 'string', description: 'CSS selector (fallback)' },
+      },
+      required: ['text'],
+    },
+  },
+};
+export const BROWSER_EVAL_TOOL = {
+  type: 'function',
+  function: {
+    name: 'browser_eval',
+    description: 'Evaluate a JavaScript expression in the current page context. Pass a function source like `() => document.title` or `async () => await fetch("/api/x").then(r=>r.json())`.',
+    parameters: {
+      type: 'object',
+      properties: { function: { type: 'string', description: 'Arrow function source returning a value' } },
+      required: ['function'],
+    },
+  },
+};
+
 export const ALL_TOOLS = [
   READ_FILE_TOOL, LIST_FILES_TOOL, GIT_LOG_TOOL, GIT_DIFF_TOOL,
   CODE_STATS_TOOL, DEPENDENCY_GRAPH_TOOL, FIND_REFERENCES_TOOL,
@@ -623,7 +697,15 @@ export const ALL_TOOLS = [
   FAST_FIND_TOOL, LSP_SYMBOLS_TOOL, LSP_DEFINITIONS_TOOL, LSP_DIAGNOSTICS_TOOL,
   AST_SEARCH_TOOL, SYMBOL_MAP_TOOL, STRUCT_DIFF_TOOL, SHELL_LINT_TOOL,
   OPENAPI_SEARCH_TOOL,
+  BROWSER_NAVIGATE_TOOL, BROWSER_SNAPSHOT_TOOL, BROWSER_SCREENSHOT_TOOL,
+  BROWSER_CLICK_TOOL, BROWSER_TYPE_TOOL, BROWSER_EVAL_TOOL,
 ];
+
+// Tool names that are routed to browser-tools.js (async) instead of executeTool (sync).
+export const BROWSER_TOOL_NAMES = new Set([
+  'browser_navigate', 'browser_snapshot', 'browser_screenshot',
+  'browser_click', 'browser_type', 'browser_eval',
+]);
 
 // ═══════════════════════════════════════════
 // Code Mode — 2 generic tools instead of 30
@@ -961,10 +1043,12 @@ function execFindReferences({ symbol, path: dirPath, language }) {
 
 function execSecurityScan({ path: dirPath }) {
   const checks = [
-    { name: 'Hardcoded Secrets', patterns: ['password\\s*=\\s*["\'][^"\']+["\']', 'api_key\\s*=\\s*["\']', 'secret\\s*=\\s*["\'][^"\']+["\']', 'token\\s*=\\s*["\'][A-Za-z0-9]'] },
-    { name: 'SQL Injection', patterns: ['SELECT.*FROM.*WHERE.*\\+', 'INSERT INTO.*\\+.*req', 'query\\(.*\\+.*req'] },
-    { name: 'Command Injection', patterns: ['eval\\(.*req', 'os\\.system\\(.*input', 'subprocess\\.call.*shell=True'] },
-    { name: 'Insecure Config', patterns: ['debug\\s*=\\s*[Tt]rue', 'verify\\s*=\\s*[Ff]alse', 'disable.*ssl'] },
+    { name: 'Hardcoded Secrets', patterns: ['password\\s*=\\s*["\'][^"\']+["\']', 'api_key\\s*=\\s*["\']', 'secret\\s*=\\s*["\'][^"\']+["\']', 'token\\s*=\\s*["\'][A-Za-z0-9]', 'sk_live_', 'sk_test_', 'AKIA[A-Z0-9]', 'ghp_[A-Za-z0-9]', 'SG\\.[A-Za-z0-9]', 'mongodb://[^\\s]*:[^\\s]*@'] },
+    { name: 'SQL Injection', patterns: ['SELECT.*FROM.*WHERE.*\\+', 'INSERT INTO.*\\+.*req', 'query\\(.*\\+.*req', 'DELETE FROM.*\\+.*req', 'UPDATE.*SET.*\\$\\{'] },
+    { name: 'Command Injection', patterns: ['eval\\(.*req', 'eval\\(.*body', 'exec\\(.*req', 'exec\\(.*query', 'os\\.system\\(.*input', 'subprocess\\.call.*shell=True'] },
+    { name: 'Insecure Config', patterns: ['debug\\s*=\\s*[Tt]rue', 'verify\\s*=\\s*[Ff]alse', 'disable.*ssl', 'Access-Control-Allow-Origin.*\\*'] },
+    { name: 'Path Traversal', patterns: ['readFileSync\\(.*req', 'readFile\\(.*req', 'sendFile\\(.*req', 'readFileSync\\(.*query', 'sendFile.*\\+.*req'] },
+    { name: 'SSRF', patterns: ['fetch\\(.*req\\.', 'fetch\\(.*query', 'axios.*req\\.query', 'http\\.get\\(.*req'] },
     { name: 'Sensitive Files', patterns: ['\\.env$', 'private_key', '\\.pem$'] },
   ];
 
@@ -975,7 +1059,7 @@ function execSecurityScan({ path: dirPath }) {
     let findings = '';
     patterns.forEach(pat => {
       try {
-        const result = exec(`rg --no-heading -n -m 5 -i -- "${pat}" "${dirPath}" --glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!*tools.js' --glob '!*server.js' --glob '!*README*' --glob '!*.zig' 2>/dev/null || true`);
+        const result = exec(`rg --no-heading -n -m 5 -i -- "${pat}" "${dirPath}" --glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!*README*' 2>/dev/null || true`);
         if (result.trim()) {
           result.trim().split('\n').slice(0, 3).forEach(l => findings += `    ${l}\n`);
         }
@@ -1528,8 +1612,10 @@ function execDeepSecurityScan({ path: repoPath, ruleset = 'owasp', language }) {
         'expose.*port|EXPOSE'
       ]},
       { name: 'A07:2021 Auth Failures', patterns: [
-        'password.*=.*[a-zA-Z0-9]{8,}', 'api[_-]?key.*=.*[a-zA-Z0-9]',
-        'hardcoded.*password|password.*hardcoded'
+        'password.*=.*["\'][^"\']{4,}', 'api[_-]?key.*=.*[a-zA-Z0-9]',
+        'hardcoded.*password|password.*hardcoded',
+        'sk_live_', 'sk_test_', 'AKIA[A-Z0-9]', 'ghp_[A-Za-z0-9]', 'SG\\.[A-Za-z0-9]',
+        'mongodb://[^\\s]*:[^\\s]*@', 'JWT_SECRET.*=.*["\']'
       ]},
       { name: 'A08:2021 Software Integrity', patterns: [
         'http://.*\\.js["\'>]', 'integrity.*=.*false', 'verify.*signature.*false',
@@ -1549,7 +1635,7 @@ function execDeepSecurityScan({ path: repoPath, ruleset = 'owasp', language }) {
 
     let totalFindings = 0;
     const langFilter = language ? `--type ${language}` : '';
-    const excludes = "--glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!vendor' --glob '!dist' --glob '!*tools.js' --glob '!*server.js' --glob '!*server.py' --glob '!*README*' --glob '!*.zig'";
+    const excludes = "--glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!vendor' --glob '!dist' --glob '!*README*'";
 
     for (const check of owaspChecks) {
       let findings = '';
@@ -1814,7 +1900,7 @@ function execSecretsScan({ path: repoPath, scan_history = true }) {
     ];
 
     let totalFindings = 0;
-    const excludes = "--glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!vendor' --glob '!dist' --glob '!*.map' --glob '!*tools.js' --glob '!*server.js' --glob '!*server.py' --glob '!*.test.*' --glob '!*fixture*' --glob '!*.zig' --glob '!*README*'";
+    const excludes = "--glob '!node_modules' --glob '!.git' --glob '!*.lock' --glob '!*.min.js' --glob '!vendor' --glob '!dist' --glob '!*.map' --glob '!*.test.*' --glob '!*fixture*' --glob '!*README*'";
 
     // Scan current files
     out += `## Current Files\n`;

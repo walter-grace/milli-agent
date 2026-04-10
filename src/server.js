@@ -5,12 +5,74 @@ import { createInterface } from 'readline';
 import { resolve } from 'path';
 import { homedir } from 'os';
 import { existsSync, mkdirSync } from 'fs';
-import { ALL_TOOLS, executeTool, TOOL_SEARCH_TOOL, TOOL_RUN_TOOL } from './tools.js';
+import { ALL_TOOLS, executeTool, TOOL_SEARCH_TOOL, TOOL_RUN_TOOL, BROWSER_TOOL_NAMES } from './tools.js';
+import { callBrowserTool, browserScreenshotToFile } from './browser-tools.js';
 import { ReceiptLedger, verify, quorumDiff } from './verifier.js';
+import { runSandboxStream, listSupportedLanguages } from './sandbox.js';
+import { deployWorker, deployConfigured } from './deploy.js';
 
 // Code Mode: only 3 tools sent to LLM (tool_search, tool_run, clone_repo, grep_search)
 // instead of all 30. Saves ~5,000 prompt tokens per request.
 // LLM uses tool_search to discover, tool_run to execute.
+
+// ═══ SESSION CONTEXT STORE ═══
+// Each tab writes its last result here. Chat @-mentions read from it.
+// In-memory, single-session. Cleared on server restart.
+const sessionContext = {
+  cockpit:  null,  // { repoPath, scores, grade, totalFindings, scans:{name→text}, findings:[...], summary, ts }
+  whitehat: null,  // { repoPath, totalFindings, scans:{name→text}, summary, ts }
+  search:   null,  // { pattern, path, impl, matchCount, lines, summary, ts }
+  compare:  null,  // { pattern, path, winner, results, summary, ts }
+  api:      null,  // { specPath, query, results, summary, ts }
+  heal:     null,  // { repoPath, diagnostic, fixPlan, summary, ts }
+};
+const SOURCES = ['cockpit','whitehat','search','compare','api','heal'];
+const MAX_PER_SOURCE_BYTES = 5000; // truncation cap per source when injected
+function trunc(s, n = MAX_PER_SOURCE_BYTES) {
+  if (!s) return '';
+  s = String(s);
+  return s.length <= n ? s : s.slice(0, n) + `\n…[truncated ${s.length - n} bytes]`;
+}
+function ageStr(ts) {
+  if (!ts) return null;
+  const sec = Math.round((Date.now() - ts) / 1000);
+  if (sec < 60) return sec + 's ago';
+  if (sec < 3600) return Math.round(sec / 60) + 'm ago';
+  if (sec < 86400) return Math.round(sec / 3600) + 'h ago';
+  return Math.round(sec / 86400) + 'd ago';
+}
+function formatContextBlock(name, data) {
+  if (!data) return '';
+  const ts = data.ts ? ` (${ageStr(data.ts)})` : '';
+  let body = '';
+  if (name === 'cockpit') {
+    body += `Repo: ${data.repoPath || '?'}\nGrade: ${data.grade || '?'}  ·  ${data.totalFindings ?? 0} findings  ·  ${data.scanCount ?? 0} scans\n`;
+    if (data.scores) body += `Scores: ${Object.entries(data.scores).map(([k,v])=>`${k}=${v}`).join('  ')}\n`;
+    if (data.scans) {
+      for (const [scanName, scanText] of Object.entries(data.scans)) {
+        body += `\n--- ${scanName} ---\n${trunc(scanText, 1500)}\n`;
+      }
+    }
+    if (data.findings?.length) {
+      body += `\nClickable findings (${data.findings.length}):\n`;
+      data.findings.slice(0, 30).forEach(f => { body += `  [${f.scan}] ${f.file}:${f.line}\n`; });
+    }
+  } else if (name === 'whitehat') {
+    body += `Repo: ${data.repoPath || '?'}\nTotal findings: ${data.totalFindings ?? 0}\n`;
+    if (data.scans) for (const [k, v] of Object.entries(data.scans)) body += `\n--- ${k} ---\n${trunc(v, 1200)}\n`;
+  } else if (name === 'search') {
+    body += `Pattern: ${data.pattern}\nPath: ${data.path}\nImpl: ${data.impl}  ·  ${data.matchCount ?? 0} matches\n\n`;
+    body += (data.lines || []).slice(0, 50).join('\n');
+  } else if (name === 'compare') {
+    body += `Pattern: ${data.pattern}\nPath: ${data.path}\nWinner: ${data.winner}\n\n`;
+    (data.results || []).forEach(r => { body += `  [${r.impl}] ${r.elapsed}ms  matches=${r.matchCount}\n`; });
+  } else if (name === 'api') {
+    body += `Spec: ${data.specPath}\nQuery: ${data.query || '(none)'}\n\n${trunc(data.results || '', 3500)}`;
+  } else if (name === 'heal') {
+    body += `Repo: ${data.repoPath || '?'}\n\n--- DIAGNOSTIC ---\n${trunc(data.diagnostic || '', 2000)}\n\n--- FIX PLAN ---\n${trunc(data.fixPlan || '', 2000)}`;
+  }
+  return `[@${name}${ts}]\n${trunc(body, MAX_PER_SOURCE_BYTES)}\n`;
+}
 
 const app = express();
 app.use(cors());
@@ -371,7 +433,57 @@ ALWAYS cite file paths and line numbers in format \`file.ext:42\`. NEVER fabrica
 Be terse. Minimum tools, maximum signal.` }
   ];
   try { if (history) { const h = Array.isArray(history) ? history : JSON.parse(history); conversationHistory.push(...h); } } catch {}
-  conversationHistory.push({ role: 'user', content: message });
+
+  // Receipt ledger needs to live before @-mention injection so we can record
+  // injected context as evidence the verifier can match against.
+  const ledger = new ReceiptLedger();
+
+  // ── @-mention context injection ──────────────────────────────────────
+  // Detect @cockpit, @whitehat, @search, @compare, @api, @heal in the message.
+  // For each, inject the cached sessionContext entry as a system message.
+  const mentionRe = /@(cockpit|whitehat|search|compare|api|heal)\b/gi;
+  const mentioned = new Set();
+  let m;
+  while ((m = mentionRe.exec(message)) !== null) mentioned.add(m[1].toLowerCase());
+
+  const injectedSources = [];
+  const missingSources = [];
+  if (mentioned.size > 0) {
+    const blocks = [];
+    for (const src of mentioned) {
+      if (sessionContext[src]) {
+        const block = formatContextBlock(src, sessionContext[src]);
+        blocks.push(block);
+        injectedSources.push(src);
+        // ALSO push to the verifier ledger so this counts as "evidence the agent
+        // had access to" — otherwise inline code refs to scanner names get flagged
+        // as fabricated and coverage drops to 0.
+        ledger.record('mention_' + src, { source: src }, block);
+      } else {
+        missingSources.push(src);
+      }
+    }
+    if (blocks.length > 0) {
+      conversationHistory.push({
+        role: 'system',
+        content: `The user has attached the following context from previous tab runs. Use this data to answer — do NOT re-run the tools unless explicitly asked. Cite specific findings, files, and line numbers from this context.\n\n${blocks.join('\n')}`,
+      });
+    }
+    if (missingSources.length > 0) {
+      conversationHistory.push({
+        role: 'system',
+        content: `Note: the user mentioned @${missingSources.join(', @')} but no run is cached for ${missingSources.length === 1 ? 'that tab' : 'those tabs'}. Tell the user to run ${missingSources.length === 1 ? 'that tab' : 'those tabs'} first.`,
+      });
+    }
+  }
+  // Strip the @-mentions from the user message to keep it clean (optional — LLM handles either)
+  const cleanMessage = message.replace(mentionRe, '').replace(/\s+/g, ' ').trim();
+  conversationHistory.push({ role: 'user', content: cleanMessage || message });
+
+  if (injectedSources.length > 0) {
+    send('mentions', { injected: injectedSources, missing: missingSources });
+    console.log(`Chat @-mentions: injected=${injectedSources.join(',')} missing=${missingSources.join(',')||'none'}`);
+  }
 
   console.log(`Chat: "${message.slice(0,60)}" model=${model} impl=${impl} history=${conversationHistory.length-1} msgs`);
 
@@ -379,7 +491,7 @@ Be terse. Minimum tools, maximum signal.` }
 
   const totalStart = performance.now();
   let totalToolCalls = 0, totalMcpMs = 0, totalInTok = 0, totalOutTok = 0;
-  const ledger = new ReceiptLedger(); // tool-call receipts for verification
+  // (ledger is declared earlier so @-mention injection can record into it)
 
   for (let round = 0; round < 12; round++) {
     try {
@@ -420,6 +532,40 @@ Be terse. Minimum tools, maximum signal.` }
                 : `Failed to clone repository: ${repoInput}`;
               totalToolCalls++;
               send('tool_result', { id: tc.id, impl: 'git', elapsed: Math.round(performance.now() - toolStart), bytes: content.length, matchCount: localPath ? 1 : 0, preview: [content.slice(0, 200)] });
+
+            } else if (BROWSER_TOOL_NAMES.has(tc.function.name)) {
+              // Route to chrome-devtools-mcp singleton
+              const name = tc.function.name;
+              let result;
+              try {
+                if (name === 'browser_navigate') {
+                  result = await callBrowserTool('navigate_page', { url: args.url });
+                } else if (name === 'browser_snapshot') {
+                  result = await callBrowserTool('take_snapshot', {});
+                } else if (name === 'browser_screenshot') {
+                  const filePath = await browserScreenshotToFile();
+                  result = `Screenshot saved to: ${filePath}`;
+                } else if (name === 'browser_click') {
+                  result = await callBrowserTool('click', args);
+                } else if (name === 'browser_type') {
+                  // chrome-devtools-mcp uses fill for inputs, type_text for keystrokes
+                  result = await callBrowserTool(args.uid || args.selector ? 'fill' : 'type_text', args);
+                } else if (name === 'browser_eval') {
+                  result = await callBrowserTool('evaluate_script', { function: args.function });
+                } else {
+                  result = `Unknown browser tool: ${name}`;
+                }
+              } catch (e) {
+                result = `Browser tool error: ${e.message}`;
+              }
+              totalToolCalls++;
+              const elapsed = Math.round(performance.now() - toolStart);
+              const fullText = String(result);
+              content = fullText.length > 6000 ? fullText.slice(0, 6000) + '\n...(truncated)' : fullText;
+              const receiptId = ledger.record(tc.function.name, args, fullText);
+              content = `[receipt:${receiptId}]\n` + content;
+              const lines = fullText.split('\n').filter(l => l.trim()).slice(0, 20);
+              send('tool_result', { id: tc.id, impl: 'browser', elapsed, bytes: fullText.length, matchCount: lines.length, preview: lines.slice(0, 10), receipt: receiptId });
 
             } else if (['grep_search', 'read_file', 'list_files', 'code_stats'].includes(tc.function.name)) {
               // Route through the selected MCP server (C++/Rust/Swift/Python)
@@ -508,10 +654,20 @@ Be terse. Minimum tools, maximum signal.` }
         // optionally include frontier judge for low-confidence responses
         try {
           const useJudge = req.body.verify_with_judge !== false && totalToolCalls > 0;
+          // Resolve relative file:line citations against any repo the user
+          // has touched in this session — cockpit/whitehat/heal each cache
+          // their repoPath so the verifier can read /tmp/milli-push/repos/foo/lib/bar.js
+          // when the LLM cites just lib/bar.js.
+          const repoRoots = [
+            sessionContext.cockpit?.repoPath,
+            sessionContext.whitehat?.repoPath,
+            sessionContext.heal?.repoPath,
+          ].filter(Boolean);
           const trustReport = await verify(content, ledger, {
             useJudge,
             apiKey: process.env.OPENROUTER_API_KEY,
             model: 'google/gemma-4-26b-a4b-it',
+            repoRoots,
           });
           send('verification', trustReport);
         } catch (e) {
@@ -563,6 +719,13 @@ app.post('/api/search/direct', async (req, res) => {
     if (glob) args.glob = glob;
     const result = await server.search(args);
     const lines = result.text.split('\n').filter(l => l.trim());
+    sessionContext.search = {
+      pattern, path: args.path, impl,
+      matchCount: lines.length,
+      lines: lines.slice(0, 100),
+      summary: `"${pattern}" → ${lines.length} matches via ${impl}`,
+      ts: Date.now(),
+    };
     res.json({
       impl, pattern, path: args.path,
       elapsed: result.elapsed, bytes: result.bytes,
@@ -595,10 +758,16 @@ app.post('/api/search/race', async (req, res) => {
   }));
 
   const valid = results.filter(r => !r.error).sort((a, b) => a.elapsed - b.elapsed);
+  const winner = valid[0]?.impl || null;
+  sessionContext.compare = {
+    pattern, path: args.path, winner, results,
+    summary: `"${pattern}" raced ${results.length} servers · winner ${winner}`,
+    ts: Date.now(),
+  };
   res.json({
     pattern, path: args.path,
     totalMs: Math.round((performance.now() - start) * 100) / 100,
-    winner: valid[0]?.impl || null,
+    winner,
     results,
   });
 });
@@ -742,6 +911,12 @@ app.post('/api/openapi/search', async (req, res) => {
   const start = performance.now();
   const text = executeTool('openapi_search', { path: specPath, query: query || '', mode: mode || 'search', method: method || '' });
   const elapsed = Math.round(performance.now() - start);
+  sessionContext.api = {
+    specPath, query: query || '',
+    results: text,
+    summary: `${specPath.split('/').pop()} · ${(text||'').length} bytes`,
+    ts: Date.now(),
+  };
   res.json({ text, elapsed, impl: 'node', bytes: text?.length || 0 });
 });
 
@@ -820,6 +995,13 @@ Respond with a clear action plan. Be specific about what to change.` },
     const completion = await chatWithRetry(messages, model);
     const fixPlan = completion.choices?.[0]?.message?.content || 'No fix plan generated';
     send('step', { phase: 'fix', status: 'done', text: fixPlan });
+    sessionContext.heal = {
+      repoPath,
+      diagnostic: diagResult,
+      fixPlan,
+      summary: 'diagnosed + fix plan generated',
+      ts: Date.now(),
+    };
   } catch (e) {
     send('step', { phase: 'fix', status: 'error', text: 'LLM error: ' + e.message });
   }
@@ -829,6 +1011,217 @@ Respond with a clear action plan. Be specific about what to change.` },
 });
 
 // White-hat full security audit — runs all security tools, streams results via SSE
+// ─── Cockpit findings extractor (per-scanner, strict) ───
+// Returns [{file, line, snippet?}] for a single scanner's text output.
+// Excludes scanners that don't produce findings (code_stats, repo_summary).
+// Requires file:line to appear at the start of an indented line (real entry,
+// not a URL or a quoted README example). Strips http(s) URLs first to avoid
+// matching ports in CVE advisory links.
+function extractCockpitFindings(scanName, text) {
+  if (!text) return [];
+  if (scanName === 'code_stats' || scanName === 'repo_summary') return [];
+
+  const out = [];
+  const seen = new Set();
+  const lines = text.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+    if (!line.trim()) continue;
+    // Strip URLs first — advisory links contain colons that look like file:line
+    line = line.replace(/https?:\/\/\S+/g, '');
+    // Real findings are indented (2+ spaces). Top-level headings/labels skipped.
+    // Pattern: optional indent, then path with extension, then :line, then space or end
+    const m = line.match(/^\s{2,}([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+):(\d+)(?:[\s:]|$)/);
+    if (!m) continue;
+    const file = m[1];
+    const lineNum = parseInt(m[2], 10);
+    if (!Number.isFinite(lineNum)) continue;
+    // Filter common false positives: scanner self-references and dotfiles in package paths
+    if (/node_modules\/.*\.json/.test(file) && file.length < 30) continue;
+    const key = file + ':' + lineNum;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // Snippet = the rest of the line after the file:line
+    const after = line.slice(m[0].length).trim().slice(0, 120);
+    out.push({ file, line: lineNum, snippet: after || undefined });
+    if (out.length >= 30) break;
+  }
+  return out;
+}
+
+// Count "real" findings for a scanner — uses extractor for indented findings,
+// plus the scanner's own structured count for dependency_audit (npm audit JSON-ish).
+function countCockpitFindings(scanName, text, extracted) {
+  if (!text) return 0;
+  if (scanName === 'code_stats' || scanName === 'repo_summary') return 0;
+  // dependency_audit: parse the "Vulnerabilities: critical=X high=Y moderate=Z low=W" line
+  if (scanName === 'dependency_audit') {
+    const m = text.match(/Vulnerabilities:\s*critical=(\d+)\s*high=(\d+)\s*moderate=(\d+)\s*low=(\d+)/);
+    if (m) return parseInt(m[1]) + parseInt(m[2]) + parseInt(m[3]) + parseInt(m[4]);
+  }
+  // Otherwise use the count of distinct file:line refs we extracted
+  return extracted.length;
+}
+
+// ═══ COCKPIT — Unified Mission Control ═══
+// Runs all scans in TRUE parallel via child processes and streams events live.
+app.post('/api/cockpit/analyze', async (req, res) => {
+  const { repo, path: localPath } = req.body;
+  if (!repo && !localPath) return res.status(400).json({ error: 'repo or path required' });
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+  const send = (event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    if (typeof res.flush === 'function') res.flush();
+  };
+
+  let repoPath = localPath;
+
+  // Clone if needed (sync — needs to finish before scans launch)
+  if (repo && !localPath) {
+    send('step', { name: 'clone', status: 'running', label: 'Cloning repository' });
+    const t0 = performance.now();
+    try {
+      repoPath = cloneOrGetRepo(repo);
+      if (!repoPath) throw new Error('Clone failed');
+      send('step', { name: 'clone', status: 'done', label: 'Cloned', elapsed: Math.round(performance.now() - t0), path: repoPath });
+    } catch (e) {
+      send('step', { name: 'clone', status: 'error', label: 'Clone failed: ' + e.message });
+      res.end();
+      return;
+    }
+  }
+
+  const scans = [
+    { name: 'code_stats',         label: 'Code Statistics',     scoreKey: 'complexity' },
+    { name: 'repo_summary',       label: 'Repo Overview',       scoreKey: 'maintainability' },
+    { name: 'deep_security_scan', label: 'OWASP Security Scan', scoreKey: 'security', args: { ruleset: 'owasp' } },
+    { name: 'dependency_audit',   label: 'CVE Dependency Audit',scoreKey: 'security' },
+    { name: 'secrets_scan',       label: 'Secrets Detection',   scoreKey: 'security', args: { scan_history: false } },
+    { name: 'security_scan',      label: 'Pattern Security',    scoreKey: 'security' },
+    { name: 'port_scan',          label: 'Network Exposure',    scoreKey: 'security' },
+  ];
+
+  // Announce all as running BEFORE launching any work — these flush immediately
+  scans.forEach(s => send('step', { name: s.name, status: 'running', label: s.label }));
+
+  const scanResults = {};
+  const workerScript = resolve(__dirname, 'cockpit-worker.js');
+
+  const runOne = (scan) => new Promise((done) => {
+    const t0 = performance.now();
+    const args = { path: repoPath, ...(scan.args || {}) };
+    const child = spawn(process.execPath, [workerScript, scan.name, JSON.stringify(args)], {
+      cwd: resolve(__dirname, '..'),
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', d => stdout += d.toString());
+    child.stderr.on('data', d => stderr += d.toString());
+    child.on('exit', (code) => {
+      const elapsed = Math.round(performance.now() - t0);
+      if (code !== 0 || !stdout) {
+        send('step', { name: scan.name, status: 'error', label: scan.label + ': ' + (stderr.trim().slice(-200) || 'exit '+code), elapsed });
+        scanResults[scan.name] = { text: '', elapsed, findings: 0, scoreKey: scan.scoreKey };
+        return done();
+      }
+      const text = stdout;
+      const extracted = extractCockpitFindings(scan.name, text);
+      const findings = countCockpitFindings(scan.name, text, extracted);
+      scanResults[scan.name] = { text, elapsed, findings, scoreKey: scan.scoreKey, extracted };
+      send('step', { name: scan.name, status: 'done', label: scan.label, elapsed, findings, text });
+      // Emit each verified finding as its own SSE 'finding' event for the right panel
+      extracted.slice(0, 15).forEach(f => {
+        send('finding', {
+          scan: scan.name,
+          file: f.file,
+          line: f.line,
+          snippet: f.snippet,
+          severity: scan.scoreKey === 'security' ? 'warn' : 'info',
+        });
+      });
+      done();
+    });
+    child.on('error', (err) => {
+      send('step', { name: scan.name, status: 'error', label: scan.label + ': ' + err.message, elapsed: Math.round(performance.now() - t0) });
+      scanResults[scan.name] = { text: '', elapsed: Math.round(performance.now() - t0), findings: 0, scoreKey: scan.scoreKey };
+      done();
+    });
+  });
+
+  // True parallel: each scan runs in its own child process
+  await Promise.all(scans.map(runOne));
+
+  // Compute 6 scores (0-100, higher = better)
+  const secFindings = Object.values(scanResults).filter(r => r.scoreKey === 'security').reduce((s, r) => s + (r.findings || 0), 0);
+  const securityScore = Math.max(0, 100 - secFindings * 3);
+
+  // Quality: based on repo_summary presence + no errors
+  const qualityScore = scanResults.repo_summary ? 85 : 60;
+
+  // Complexity: inverse of LOC (rough)
+  const codeStatsText = scanResults.code_stats?.text || '';
+  const locMatch = codeStatsText.match(/(\d[\d,]*)\s*(lines|LOC)/i);
+  const loc = locMatch ? parseInt(locMatch[1].replace(/,/g, '')) : 0;
+  const complexityScore = loc === 0 ? 75 : Math.max(20, 100 - Math.min(80, Math.floor(loc / 1000)));
+
+  // Performance: based on scan elapsed times
+  const avgElapsed = Object.values(scanResults).reduce((s, r) => s + (r.elapsed || 0), 0) / Math.max(1, Object.keys(scanResults).length);
+  const performanceScore = Math.max(40, 100 - Math.floor(avgElapsed / 100));
+
+  // Maintainability: based on secrets + deps
+  const maintScore = Math.max(30, 95 - (scanResults.secrets_scan?.findings || 0) * 5 - (scanResults.dependency_audit?.findings || 0) * 2);
+
+  // Trust: average of all + presence of tests (placeholder)
+  const trustScore = Math.round((securityScore + qualityScore + maintScore) / 3);
+
+  const scores = {
+    security: Math.round(securityScore),
+    quality: Math.round(qualityScore),
+    complexity: Math.round(complexityScore),
+    performance: Math.round(performanceScore),
+    maintainability: Math.round(maintScore),
+    trust: trustScore,
+  };
+
+  send('scores', scores);
+
+  const totalFindings = Object.values(scanResults).reduce((s, r) => s + (r.findings || 0), 0);
+  const grade = trustScore >= 90 ? 'A+' : trustScore >= 80 ? 'A' : trustScore >= 70 ? 'B' : trustScore >= 60 ? 'C' : 'D';
+
+  // Cache for @cockpit mentions in chat
+  const cockpitFindings = [];
+  for (const [scanName, r] of Object.entries(scanResults)) {
+    const refs = (r.text || '').match(/([a-zA-Z0-9_\-./]+\.[a-z]+):(\d+)/g) || [];
+    [...new Set(refs)].slice(0, 15).forEach(ref => {
+      const [file, line] = ref.split(':');
+      cockpitFindings.push({ scan: scanName, file, line: parseInt(line) });
+    });
+  }
+  sessionContext.cockpit = {
+    repoPath,
+    scores,
+    grade,
+    totalFindings,
+    scanCount: scans.length,
+    scans: Object.fromEntries(Object.entries(scanResults).map(([k, v]) => [k, v.text])),
+    findings: cockpitFindings,
+    summary: `grade ${grade} · ${totalFindings} findings · ${scans.length} scans`,
+    ts: Date.now(),
+  };
+
+  send('complete', { totalFindings, scanCount: scans.length, scores, grade, repoPath });
+  res.end();
+});
+
 app.post('/api/security/audit', async (req, res) => {
   const { repo, path: localPath } = req.body;
   if (!repo && !localPath) return res.status(400).json({ error: 'repo or path required' });
@@ -882,9 +1275,208 @@ app.post('/api/security/audit', async (req, res) => {
     }
   }
 
+  // Cache for @whitehat mentions
+  sessionContext.whitehat = {
+    repoPath,
+    totalFindings,
+    scanCount: scans.length,
+    scans: Object.fromEntries(Object.entries(results).map(([k, v]) => [k, v.text])),
+    summary: `${totalFindings} findings · ${scans.length} scans`,
+    ts: Date.now(),
+  };
+
   // Summary
   send('complete', { totalFindings, scanCount: scans.length, results: Object.fromEntries(Object.entries(results).map(([k,v]) => [k, { elapsed: v.elapsed, findings: v.findings }])) });
   res.end();
+});
+
+// ═══ SELF-HEAL LOOP — write → run in sandbox → if exit≠0, patch → retry ═══
+// Picoclaw-style: the agent fixes its own bugs in an isolated environment.
+// Streams each iteration via SSE so the UI can show the loop live.
+//
+// Body: { code, language, objective?, max_attempts?, model? }
+// Events: iteration{n,phase,detail}, stdout{chunk}, stderr{chunk}, exit{code,elapsed},
+//         patch{newCode}, done{status,attempts,finalCode}
+import { runSandbox } from './sandbox.js';
+
+app.post('/api/sandbox/self-heal', async (req, res) => {
+  const { code, language, objective, max_attempts = 5, model = 'google/gemma-4-26b-a4b-it' } = req.body || {};
+  if (!code || typeof code !== 'string') return res.status(400).json({ error: 'code (string) required' });
+  if (!language) return res.status(400).json({ error: 'language required' });
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+  const send = (event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    if (typeof res.flush === 'function') res.flush();
+  };
+
+  let currentCode = code;
+  let attempt = 0;
+  const t0 = Date.now();
+  const maxA = Math.max(1, Math.min(10, parseInt(max_attempts, 10) || 5));
+
+  while (attempt < maxA) {
+    attempt++;
+    send('iteration', { n: attempt, phase: 'run', codePreview: currentCode.slice(0, 200) });
+
+    // Run the current code in the sandbox (10s timeout)
+    const result = await runSandbox({ code: currentCode, language, timeout: 10000 });
+
+    // Stream the output
+    if (result.stdout) send('stdout', { chunk: result.stdout });
+    if (result.stderr) send('stderr', { chunk: result.stderr });
+    send('exit', { n: attempt, code: result.exitCode, elapsed: result.elapsedMs, timedOut: result.timedOut });
+
+    if (result.exitCode === 0 && !result.timedOut) {
+      send('done', {
+        status: 'passed',
+        attempts: attempt,
+        elapsedMs: Date.now() - t0,
+        finalCode: currentCode,
+        finalStdout: result.stdout,
+      });
+      res.end();
+      return;
+    }
+
+    // Failed. If we have attempts left, ask the LLM to patch.
+    if (attempt >= maxA) {
+      send('done', {
+        status: 'failed',
+        attempts: attempt,
+        elapsedMs: Date.now() - t0,
+        finalCode: currentCode,
+        finalStderr: result.stderr,
+        reason: result.timedOut ? 'timeout' : `exit ${result.exitCode}`,
+      });
+      res.end();
+      return;
+    }
+
+    send('iteration', { n: attempt, phase: 'patch', detail: 'asking ' + model + ' to fix' });
+
+    const fixPrompt = `You are a code-repair agent. The following ${language} code failed in a sandbox.
+
+${objective ? `OBJECTIVE: ${objective}\n\n` : ''}CURRENT CODE:
+\`\`\`${language}
+${currentCode}
+\`\`\`
+
+EXIT CODE: ${result.exitCode}${result.timedOut ? ' (timeout)' : ''}
+
+STDOUT:
+${result.stdout || '(empty)'}
+
+STDERR:
+${result.stderr || '(empty)'}
+
+Reply with EXACTLY ONE corrected code block in the same language. No prose, no explanation outside the code block. Just one fenced \`\`\`${language} ... \`\`\` block.`;
+
+    try {
+      const completion = await chatWithRetry(
+        [{ role: 'user', content: fixPrompt }],
+        model,
+      );
+      const reply = completion.choices?.[0]?.message?.content || '';
+      // Extract the first fenced code block
+      const m = reply.match(/```(?:[a-zA-Z]+)?\n([\s\S]*?)```/);
+      if (!m) {
+        send('iteration', { n: attempt, phase: 'patch', detail: 'LLM did not return a code block, retrying with same code' });
+        continue; // try again with the same code (rare — usually means LLM emitted prose)
+      }
+      const newCode = m[1].trim();
+      if (newCode === currentCode.trim()) {
+        send('done', {
+          status: 'stuck',
+          attempts: attempt,
+          elapsedMs: Date.now() - t0,
+          finalCode: currentCode,
+          reason: 'LLM returned identical code (giving up)',
+        });
+        res.end();
+        return;
+      }
+      send('patch', { n: attempt, newCode, diff_summary: `${newCode.split('\n').length} lines (was ${currentCode.split('\n').length})` });
+      currentCode = newCode;
+    } catch (e) {
+      send('iteration', { n: attempt, phase: 'patch', detail: 'LLM call failed: ' + e.message });
+      // Don't bail — try one more time with the same code
+    }
+  }
+});
+
+// ═══ SANDBOX — execute a code block in an isolated process ═══
+// Uses macOS sandbox-exec (fs-restricted, network-denied) via src/sandbox.js.
+app.post('/api/sandbox/run', async (req, res) => {
+  const { code, language, timeout } = req.body || {};
+  if (!code || typeof code !== 'string') return res.status(400).json({ error: 'code (string) required' });
+  if (!language) return res.status(400).json({ error: 'language required (one of: ' + listSupportedLanguages().join(',') + ')' });
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+  const send = (event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    if (typeof res.flush === 'function') res.flush();
+  };
+
+  send('start', { language, timeout: timeout || 10000 });
+
+  try {
+    runSandboxStream({ code, language, timeout: timeout || 10000 }, {
+      onStdout: (chunk) => send('stdout', { chunk }),
+      onStderr: (chunk) => send('stderr', { chunk }),
+      onExit: ({ id, exitCode, signal, elapsedMs, timedOut }) => {
+        send('exit', { id, exitCode, signal, elapsedMs, timedOut });
+        res.end();
+      },
+      onError: (err) => {
+        send('error', { message: err.message });
+        res.end();
+      },
+    });
+  } catch (e) {
+    send('error', { message: e.message });
+    res.end();
+  }
+});
+
+// Sandbox capabilities — lets the UI know if deploy is wired
+app.get('/api/sandbox/config', (_, res) => {
+  res.json({
+    runtime: 'sandbox-exec',
+    languages: listSupportedLanguages(),
+    deploy: {
+      provider: 'cloudflare-workers',
+      configured: deployConfigured(),
+      languages: ['js','ts','mjs'],
+    },
+  });
+});
+
+// ═══ DEPLOY — push a code block to Cloudflare Workers ═══
+app.post('/api/sandbox/deploy', async (req, res) => {
+  const { code, language, name } = req.body || {};
+  if (!code) return res.status(400).json({ error: 'code required' });
+  if (!['js','ts','mjs'].includes(String(language||'').toLowerCase())) {
+    return res.status(400).json({ error: 'Cloudflare Workers only supports JavaScript/TypeScript. Use language: js, ts, or mjs.' });
+  }
+  try {
+    const result = await deployWorker({ code, language, name });
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: e.hint });
+  }
 });
 
 // File read endpoint for code viewer
@@ -922,6 +1514,16 @@ app.get('/api/models/health', async (_, res) => {
   }));
   results.sort((a, b) => (a.ok === b.ok ? a.ms - b.ms : a.ok ? -1 : 1));
   res.json(results);
+});
+
+// What @-mention sources are currently attachable in chat?
+app.get('/api/context', (_, res) => {
+  const out = {};
+  for (const k of SOURCES) {
+    const v = sessionContext[k];
+    out[k] = v ? { available: true, age: ageStr(v.ts), summary: v.summary || '' } : { available: false };
+  }
+  res.json(out);
 });
 
 app.get('/api/models', (_, res) => res.json(MODELS));

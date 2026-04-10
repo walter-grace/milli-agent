@@ -1,207 +1,321 @@
 # Milli-Agent
 
-Ultra-fast code search agent. Clone any GitHub repo and search it in milliseconds.
+**A cockpit for code.** Drop a GitHub URL, get a security audit, dependency report, code map, and AI walkthrough — in parallel, in seconds, with citations you can click.
 
-Built on ripgrep + MCP servers in C++, Rust, Zig, Swift, and Python — racing side-by-side. Optional AI analysis via OpenRouter or local LLMs.
+Built on 5 MCP servers (C++, Rust, Swift, Python, Zig), 34+ tools, and a multi-model LLM backend. Every answer is verified against the source before it ships.
 
-**Web**: [milli-agent.fly.dev](https://milli-agent.fly.dev)
+---
 
-## Quick Start
+## Why use it
 
-### CLI (recommended)
+Most code-analysis tools make you pick one thing: either fast grep, or AI chat, or a security scanner, or a dependency auditor. Milli-Agent runs all of them on the same repo at the same time and gives you one screen to read.
 
-```bash
-# Install globally
-npm install -g milli-agent
+- **Mission Control (Cockpit)** — one view, six scores, all scanners running in parallel.
+- **Verified answers** — every chat response is graded against the files it cites; hallucinations get flagged with a `MOSTLY_HALLUCINATED` badge.
+- **Race the runtimes** — same query, side-by-side, across C++/Rust/Swift/Python ripgrep wrappers. Pick whichever is fastest for your machine.
+- **Real CVE data** — `dependency_audit` runs `npm audit` / `pip-audit` / `cargo audit` against the repo, not a static rule list.
+- **Self-host friendly** — works with OpenRouter, Ollama, llama.cpp, or LM Studio. No telemetry.
 
-# Run the agent
-milli-agent
+If you've ever done `git clone … && grep -r … && npm audit && cat package.json` over and over to vet a repo, this is the one window that does all of that.
 
-# Opens at http://localhost:3000
-```
+---
 
-Or run without installing:
-
-```bash
-npx milli-agent
-```
-
-### From source
+## Quick start
 
 ```bash
 git clone https://github.com/walter-grace/milli-agent.git
 cd milli-agent
 npm install
-
-# Build all MCP servers (C++, Rust, Zig, Swift)
-chmod +x bin/build.sh && ./bin/build.sh
-
-# Set API key for AI features (optional — search works without it)
-export OPENROUTER_API_KEY="your-key"
-
-# Start
-npm start
+./bin/build.sh                     # builds C++/Rust/Swift/Zig MCP servers
+export OPENROUTER_API_KEY=sk-or-v1-...   # optional — search/security work without it
+node src/server.js
+# → http://localhost:3000
 ```
 
-### Docker
+If port 3000 is busy: `PORT=3030 node src/server.js`.
+
+**Requirements:** Node 18+, ripgrep, and a C/C++ toolchain. Rust/Swift/Zig are optional — Python and Node fallbacks cover everything.
+
+**Recommended extras** (auto-detected, scanners gracefully degrade if missing):
 
 ```bash
-docker build -t milli-agent .
-docker run -p 3000:3000 -e OPENROUTER_API_KEY=your-key milli-agent
+brew install ripgrep gitleaks fd universal-ctags difftastic
+pipx install semgrep pip-audit
 ```
 
-## What it does
+---
 
-Paste a GitHub URL. Repo gets cloned. Search it in <100ms.
+## The tabs
 
-```
-You: Clone https://github.com/facebook/react and find all TODO comments
+| Tab | What it does |
+|---|---|
+| **🛩 Cockpit** | The default view. Drop a URL → 7 scanners run in parallel → 6 score cards (Security / Quality / Complexity / Performance / Maintainability / Trust) + clickable findings list + inline code viewer. |
+| **🔍 Search** | Instant ripgrep over a cloned repo. Sub-100ms results, split-pane code viewer with VS Code Dark+ syntax highlighting. |
+| **💬 Chat** | Full agent loop with 34+ tools. Streams tool calls, renders markdown, attaches a trust badge to every response. Click any `file:line` citation to jump to the exact line. |
+| **🏎 Compare** | Same prompt, multiple LLMs in parallel. Useful for "which model actually understands this codebase?" |
+| **📡 API** | Upload an OpenAPI spec or auto-discover one in a cloned repo. Parses 8.9 MB Cloudflare spec in ~175 ms. Search endpoints/schemas; race servers. |
+| **🛡 WhiteHat** | One-click security pipeline: 7 scans with a warp-speed loading animation and an A+ → D grade. |
+| **🧬 Heal** | Clone → diagnose lint/test failures → AI generates a fix plan. (Fix-apply loop is in progress.) |
 
-Milli-Agent:
-  → clone_repo("facebook/react")         ✓ cloned
-  → grep_search("TODO", path=react/)     ✓ 847 matches in 42ms
-  
-  Found 847 TODO comments across the React codebase...
-```
+---
 
-### Three modes
+## What it actually does on a real repo
 
-| Mode | Speed | What it does |
-|------|-------|-------------|
-| **Search** | <100ms | Direct ripgrep — instant results, no LLM |
-| **Chat** | 3-10s | Agent loop — LLM calls grep_search, analyzes results |
-| **Compare** | <100ms | Same query through all MCP servers side-by-side |
+Below is a verbatim run from a fresh clone of [`tj/commander.js`](https://github.com/tj/commander.js) (220 files, 33,115 LOC, 1.1 MB) on an Apple M-series Mac. Numbers are from `POST /api/cockpit/analyze`.
 
-## Features
-
-- **Millisecond search** — ripgrep through MCP servers, sub-100ms results
-- **Clone any repo** — paste a GitHub URL, auto-clones and indexes
-- **AI analysis** — optional LLM summarizes what it found (OpenRouter or local)
-- **Compare servers** — race C++, Rust, Zig, Swift, Python on the same query
-- **Cost tracking** — real-time cost meter for API usage
-- **Local LLM support** — works with llama.cpp, Ollama, LM Studio
-- **CLI + Web** — terminal agent or browser UI
-
-## Architecture
-
-```
-                    ┌─────────────────────────────────┐
-                    │         Milli-Agent              │
-                    │         (Node.js)                │
-                    └──────┬──────────────┬────────────┘
-                           │              │
-              ┌────────────▼──┐    ┌──────▼───────┐
-              │  MCP Servers  │    │  LLM Backend  │
-              │  (stdio)      │    │  (optional)   │
-              └───────┬───────┘    └──────┬────────┘
-                      │                   │
-        ┌─────┬───────┼───────┬─────┐     │
-        │     │       │       │     │     │
-       C++  Rust    Zig    Swift  Python  │
-       40K  378K    91K    62K   script   │
-        │     │       │       │     │     │
-        └─────┴───────┼───────┴─────┘     │
-                      │                   │
-                  ┌───▼───┐        ┌──────▼──────┐
-                  │ripgrep│        │ OpenRouter   │
-                  │ (rg)  │        │ Ollama       │
-                  └───────┘        │ llama.cpp    │
-                                   └─────────────┘
-```
-
-## MCP Servers
-
-Five implementations of the same MCP grep_search tool, benchmarked on Apple M4:
-
-| Server | Binary | Search (5K files) | Memory | Language |
-|--------|--------|-------------------|--------|----------|
-| **C++** | 40 KB | 46ms | 6.4 MB | C++17 |
-| **Swift** | 62 KB | 137ms | 8.4 MB | Swift 6 |
-| **Zig** | 91 KB | ~50ms | ~5 MB | Zig 0.14 |
-| **Rust** | 378 KB | 72ms | 7.0 MB | Rust |
-| **Python** | script | 65ms | 13.6 MB | Python 3 |
-
-All servers implement the [MCP protocol](https://modelcontextprotocol.io) over stdio and call ripgrep for the actual search.
-
-## Local LLM Support
-
-Use any OpenAI-compatible local server:
+### 1. Clone
 
 ```bash
-# With llama.cpp
-./llama-server -m model.gguf -c 4096 --port 8080
-LOCAL_LLM_URL=http://localhost:8080/v1/chat/completions milli-agent
-
-# With Ollama
-ollama serve
-LOCAL_LLM_URL=http://localhost:11434/v1/chat/completions LOCAL_LLM_MODEL=qwen3:8b milli-agent
-
-# With LM Studio
-LOCAL_LLM_URL=http://localhost:1234/v1/chat/completions milli-agent
+$ curl -X POST http://localhost:3000/api/clone \
+    -H 'Content-Type: application/json' \
+    -d '{"repo":"tj/commander.js"}'
+{"success":true,"path":".../repos/tj__commander.js"}
 ```
 
-Select "Local LLM" in the model dropdown. Zero cost, zero latency to the cloud.
+### 2. Race ripgrep across all 5 backends
 
-## Environment Variables
+```bash
+$ curl -X POST http://localhost:3000/api/search/race \
+    -H 'Content-Type: application/json' \
+    -d '{"pattern":"function","path":".../tj__commander.js","max_results":20}'
+```
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | 3000 | Server port |
-| `OPENROUTER_API_KEY` | — | OpenRouter API key for cloud LLMs |
-| `LOCAL_LLM_URL` | `http://localhost:8080/v1/chat/completions` | Local LLM endpoint |
-| `LOCAL_LLM_MODEL` | `local` | Model name for local LLM |
+| Server | Cold call | Notes |
+|---|---|---|
+| Rust | **9.3 ms** | winner |
+| Python | 9.3 ms | CPython os.walk is C-optimized |
+| C++ | 38 ms | popen subprocess overhead |
+| Swift | 76 ms | first call, JIT |
+
+### 3. One-click cockpit analysis
+
+```bash
+$ curl -N -X POST http://localhost:3000/api/cockpit/analyze \
+    -H 'Content-Type: application/json' \
+    -d '{"repo":"tj/commander.js"}'
+```
+
+The endpoint streams Server-Sent Events. Per-scan timings from this run:
+
+```
+code_stats             3155 ms   220 files / 33,115 LOC / 6 languages
+repo_summary           3136 ms   README + manifest digest
+deep_security_scan     3115 ms   OWASP regex + (semgrep if installed)
+dependency_audit       2524 ms   npm audit → 8 real CVEs
+secrets_scan            477 ms   gitleaks-style entropy + patterns
+security_scan           294 ms   pattern-based fast pass
+port_scan               139 ms   network exposure check
+```
+
+The seven scans run in parallel and finish in roughly the time of the slowest one.
+
+**Real findings on commander.js:**
+
+```
+## Node.js (npm audit)
+Packages scanned: 503
+Vulnerabilities: critical=1 high=4 moderate=3 low=0
+
+  [HIGH] glob@10.2.0 - 10.4.5
+    glob CLI: Command injection via -c/--cmd executes matches with shell:true
+    https://github.com/advisories/GHSA-5j98-mcp5-4vw2
+    Fix: fix available
+
+  [HIGH] minimatch@<=3.1.3 || 9.0.0 - 9.0.6
+    minimatch has a ReDoS via repeated wildcards…
+```
+
+That's 8 real, current CVEs in the dev-dependency tree of one of npm's most-downloaded packages — surfaced by Milli-Agent in under 3 seconds without leaving the browser.
+
+---
+
+## Verification
+
+Every chat response goes through `src/verifier.js` before it lands in your screen:
+
+1. **Citation extraction** — pull every `file:line` reference and code block out of the answer.
+2. **Byte-match re-read** — re-open each cited file and confirm the quoted lines actually exist where the model said they did.
+3. **Coverage score** — 4-gram overlap between the response and the tool output corpus.
+4. **Frontier judge** — a second LLM (configurable; default Gemma 4 26B via OpenRouter) grades how grounded the response is.
+
+You get one of:
+
+`GROUNDED` · `LIKELY_GROUNDED` · `LOW_CONFIDENCE` · `PARTIALLY_HALLUCINATED` · `MOSTLY_HALLUCINATED` · `UNGROUNDED`
+
+The badge sits under the chat response and is clickable for the full report.
+
+---
 
 ## API
 
-### Search (instant)
+All endpoints accept `Content-Type: application/json`. Streaming endpoints use SSE.
+
+### Repo
+
+| Method | Path | Body | Description |
+|---|---|---|---|
+| `POST` | `/api/clone` | `{"repo":"owner/name"}` | Shallow-clone a GitHub repo into `repos/`. |
+| `GET`  | `/api/repos` | — | List currently cloned repos. |
+| `POST` | `/api/file/read` | `{"path","start_line","end_line"}` | Read a slice of a file. |
+
+### Search
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/search/direct` | One-shot ripgrep through a chosen MCP server (`impl`: `cpp`/`rust`/`swift`/`python`/`zig`). |
+| `POST` | `/api/search/race` | Run the same query across all servers, return them ranked by elapsed time. |
+| `GET`  | `/api/search/stream` | SSE variant for the search tab. |
+| `POST` | `/api/search/analyze` | Search + AI summary. |
+
+### Cockpit (Mission Control)
 
 ```bash
-curl -X POST http://localhost:3000/api/search/direct \
-  -H "Content-Type: application/json" \
-  -d '{"pattern":"TODO","impl":"cpp","max_results":50}'
+POST /api/cockpit/analyze
+Content-Type: application/json
+
+{ "repo": "owner/name" }       # OR { "path": "/abs/path/to/repo" }
 ```
 
-### Clone a repo
+Streams these SSE events:
 
-```bash
-curl -X POST http://localhost:3000/api/clone \
-  -H "Content-Type: application/json" \
-  -d '{"repo":"facebook/react"}'
-```
+| Event | Payload |
+|---|---|
+| `step` | `{name, status: running\|done\|error, label, elapsed?, findings?, text?}` |
+| `finding` | `{scan, file, line, severity}` — clickable citations |
+| `scores` | `{security, quality, complexity, performance, maintainability, trust}` (0–100 each) |
+| `complete` | `{totalFindings, scanCount, scores, grade, repoPath}` |
 
 ### Chat (agent loop)
 
 ```bash
-curl -X POST http://localhost:3000/api/chat/stream \
-  -H "Content-Type: application/json" \
-  -d '{"message":"Find all TODO comments","model":"google/gemma-4-26b-a4b-it","impl":"cpp"}'
+POST /api/chat/stream
+{ "message": "...", "model": "google/gemma-4-26b-a4b-it", "impl": "rust" }
 ```
 
-### Race all servers
+Streams tool calls, content tokens, and a verification badge.
+
+### Security audit (sequential, with per-step warp animation)
 
 ```bash
-curl -X POST http://localhost:3000/api/search/race \
-  -H "Content-Type: application/json" \
-  -d '{"pattern":"error","max_results":20}'
+POST /api/security/audit
+{ "repo": "owner/name" }
 ```
 
-## Requirements
+### OpenAPI
 
-- **Node.js** 18+
-- **ripgrep** (`brew install ripgrep` / `cargo install ripgrep` / `apt install ripgrep`)
-- **C++ compiler** (clang/gcc) for C++ MCP server
-- **Rust** (optional) for Rust MCP server
-- **Zig** (optional) for Zig MCP server
-- **Swift** (optional, macOS only) for Swift MCP server
+| Method | Path |
+|---|---|
+| `POST` | `/api/openapi/upload` |
+| `POST` | `/api/openapi/search` |
+| `POST` | `/api/openapi/race` |
 
-## Roadmap
+### Models / health / costs
 
-- [ ] File read/write tools (full coding agent)
-- [ ] AST-aware search (tree-sitter)
-- [ ] Sandboxed code execution (Cloudflare Workers)
-- [ ] Knowledge base / embeddings
-- [ ] Picoclaw integration
-- [ ] Terminal UI (TUI) mode
+| Method | Path |
+|---|---|
+| `GET` | `/api/models` |
+| `GET` | `/api/models/health` |
+| `GET` | `/api/costs` |
+| `GET` | `/api/impls` |
+| `POST` | `/api/warmup` |
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────── Browser (vanilla JS SPA) ───────────────────────────┐
+│  Cockpit · Search · Chat · Compare · API · WhiteHat · Heal                    │
+└──────────────────────────────────────┬─────────────────────────────────────────┘
+                                       │ SSE + JSON
+                       ┌───────────────▼───────────────┐
+                       │   Node.js / Express server    │
+                       │   src/server.js               │
+                       └─┬──────────────┬──────────┬───┘
+                         │              │          │
+            ┌────────────▼──┐  ┌────────▼─────┐ ┌──▼───────────────┐
+            │  MCP servers  │  │  Tool layer  │ │  LLM backend     │
+            │  (stdio/JSON) │  │  src/tools.js│ │  OpenRouter /    │
+            │               │  │  34+ tools   │ │  Ollama / local  │
+            │  C++  · Rust  │  │  10 tiers    │ │                  │
+            │  Swift · Py   │  │              │ │  +  Verifier     │
+            │  Zig          │  │              │ │  src/verifier.js │
+            └───────┬───────┘  └──────┬───────┘ └──────────────────┘
+                    │                 │
+                ┌───▼───┐         ┌───▼─────────────────────────────┐
+                │ripgrep│         │ git · semgrep · gitleaks · trivy │
+                └───────┘         │ npm audit · pip-audit · cargo    │
+                                  │ ast-grep · ctags · difftastic    │
+                                  └──────────────────────────────────┘
+```
+
+### MCP servers
+
+Five from-scratch implementations of the same MCP tools, all speaking JSON-RPC over stdio.
+
+| Server | Implements | Notes |
+|---|---|---|
+| C++ | `grep_search`, `read_file`, `list_files`, `code_stats`, `openapi_search` | smallest binary (~40 KB) |
+| Rust | same | tightest cold call (~9 ms on small repos) |
+| Swift | same | macOS-native FileManager |
+| Python | same | wins `code_stats` (CPython `os.walk` is C-fast) |
+| Zig | `grep_search` only | 0.15 stdlib changes blocked the rest |
+
+Switch between them in the sidebar; the active impl handles all routable tool calls.
+
+### The 34+ tools (10 tiers)
+
+- **Search** — `clone_repo`, `grep_search`, `read_file`, `list_files`, `find_references`
+- **Git** — `git_log`, `git_diff`, `git_summary`, `git_effort`, `git_authors`, `git_timeline`, `git_secrets_clean`
+- **Analysis** — `code_stats`, `dependency_graph`, `compare_repos`, `repo_summary`, `knowledge_graph`
+- **Security** — `security_scan`, `deep_security_scan` (OWASP/semgrep), `dependency_audit` (CVE), `secrets_scan` (gitleaks)
+- **Infra** — `trivy_scan`, `port_scan`, `sandbox_exec`
+- **Self-heal** — `code_edit`, `code_write`, `self_heal`
+- **File / LSP** — `fast_find`, `lsp_symbols`, `lsp_definitions`, `lsp_diagnostics`
+- **AST** — `ast_search`, `symbol_map`, `struct_diff`, `shell_lint`
+- **API** — `openapi_search`
+- **Code Mode** — `tool_search`, `tool_run` (fallback meta-tools)
+
+---
+
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `3000` | HTTP port |
+| `OPENROUTER_API_KEY` | — | Cloud LLM key (optional). |
+| `LOCAL_LLM_URL` | `http://localhost:8080/v1/chat/completions` | OpenAI-compatible local endpoint. |
+| `LOCAL_LLM_MODEL` | `local` | Model name to send to the local endpoint. |
+
+### Local LLM examples
+
+```bash
+# llama.cpp
+./llama-server -m model.gguf -c 4096 --port 8080
+node src/server.js
+
+# Ollama
+ollama serve
+LOCAL_LLM_URL=http://localhost:11434/v1/chat/completions \
+LOCAL_LLM_MODEL=qwen3:8b node src/server.js
+
+# LM Studio
+LOCAL_LLM_URL=http://localhost:1234/v1/chat/completions node src/server.js
+```
+
+Pick "Local LLM" from the model dropdown. Zero cloud cost, zero outbound traffic.
+
+---
+
+## Notes & honest limitations
+
+- **Cockpit scores are heuristic.** They're a useful at-a-glance signal, not a certification. Always read the per-scan output before acting.
+- **`dependency_audit` requires the package manager** (`npm`, `pip-audit`, `cargo`) to be installed locally. Missing tools degrade gracefully with a hint.
+- **Self-heal currently generates plans, not patches.** The apply-and-test loop is the next milestone.
+- **The Zig MCP server only ships `grep_search`** because of the 0.14 → 0.15 stdlib break.
+- **Fly.io deployment is paused** — the public preview at `milli-agent.fly.dev` may be down. Run locally for now.
+
+---
 
 ## License
 

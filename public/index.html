@@ -293,9 +293,9 @@ code,.mono { font-family:'JetBrains Mono',monospace; }
 <script type="module">
 const IMPLS = {cpp:{name:'C++',color:'#00a0e4',icon:'⚡'},rust:{name:'Rust',color:'#f74c00',icon:'🦀'},zig:{name:'Zig',color:'#f7a41d',icon:'⚙'},swift:{name:'Swift',color:'#f05138',icon:'🐦'},python:{name:'Python',color:'#ffd43b',icon:'🐍'}};
 const fmt = ms => ms<1000?Math.round(ms)+'ms':(ms/1000).toFixed(1)+'s';
-const h = (tag, props, ...kids) => { const el=document.createElement(tag); if(props) Object.entries(props).forEach(([k,v])=>{ if(k==='style'&&typeof v==='object') Object.assign(el.style,v); else if(k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(),v); else if(k==='className') el.className=v; else if(k==='innerHTML') el.innerHTML=v; else el.setAttribute(k,v); }); kids.flat(9).forEach(c=>{ if(c==null)return; el.appendChild(typeof c==='string'?document.createTextNode(c):c); }); return el; };
+const h = (tag, props, ...kids) => { const el=document.createElement(tag); if(props) Object.entries(props).forEach(([k,v])=>{ if(k==='style'&&typeof v==='object') Object.assign(el.style,v); else if(k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(),v); else if(k==='className') el.className=v; else if(k==='innerHTML') el.innerHTML=v; else el.setAttribute(k,v); }); kids.flat(9).forEach(c=>{ if(c==null||c===false)return; el.appendChild((typeof c==='string'||typeof c==='number')?document.createTextNode(String(c)):c); }); return el; };
 
-let state = { tab:'search', model:'google/gemma-4-26b-a4b-it', impl:'cpp', models:[], activeModels:['google/gemma-4-26b-a4b-it'], ready:0, msgs:[], input:'', sending:false, racePattern:'', racePath:'https://github.com/walter-grace/milli-agent', raceResults:{}, raceWinner:null, racing:false, sessionCost:0, accountCost:0, cacheHits:0, cacheSaved:0, modelHealth:{} };
+let state = { tab:'cockpit', model:'google/gemma-4-26b-a4b-it', impl:'cpp', models:[], activeModels:['google/gemma-4-26b-a4b-it'], ready:0, msgs:[], input:'', sending:false, racePattern:'', racePath:'https://github.com/walter-grace/milli-agent', raceResults:{}, raceWinner:null, racing:false, sessionCost:0, accountCost:0, cacheHits:0, cacheSaved:0, modelHealth:{} };
 let currentTab = null;
 let chatInput = null; // persistent textarea ref
 let raceInput = null; // persistent race input ref
@@ -411,12 +411,13 @@ function render() {
       modelBar.appendChild(addWrap);
       content.appendChild(modelBar);
     }
-    if (state.tab==='search') content.appendChild(renderSearch());
+    if (state.tab==='cockpit') content.appendChild(renderCockpit());
+    else if (state.tab==='search') content.appendChild(renderSearch());
     else if (state.tab==='chat') content.appendChild(renderChat());
     else if (state.tab==='api') content.appendChild(renderAPI());
     else if (state.tab==='whitehat') content.appendChild(renderWhiteHat());
     else if (state.tab==='heal') content.appendChild(renderHeal());
-    else content.appendChild(renderCompare());
+    else { state.tab = 'cockpit'; content.appendChild(renderCockpit()); }
     app.appendChild(content);
     currentTab = state.tab;
   } else {
@@ -424,7 +425,6 @@ function render() {
     const oldSidebar = app.querySelector('.sidebar');
     if (oldSidebar) { const newSidebar = buildNav(); app.replaceChild(newSidebar, oldSidebar); }
     if (state.tab==='chat') updateChatMessages();
-    else if (state.tab==='compare') updateCompareResults();
   }
   } catch(e) { console.error('Render error:', e); document.getElementById('app').innerHTML = '<div style="padding:40px;color:#fff">Render error: '+e.message+'</div>'; }
 }
@@ -685,9 +685,9 @@ function updateCmdKResults(query, modal) {
 }
 
 const NAV_ITEMS = [
+  { id:'cockpit', icon:'🛩', label:'Cockpit', desc:'Mission Control' },
   { id:'search', icon:'🔍', label:'Search', desc:'Instant ripgrep' },
-  { id:'chat', icon:'💬', label:'Chat', desc:'AI Agent' },
-  { id:'compare', icon:'🏎', label:'Compare', desc:'Race servers' },
+  { id:'chat', icon:'💬', label:'Chat', desc:'AI Agent · multi-model' },
   { id:'api', icon:'📡', label:'API', desc:'OpenAPI specs' },
   { id:'whitehat', icon:'🛡', label:'WhiteHat', desc:'Security audit' },
   { id:'heal', icon:'🧬', label:'Heal', desc:'Self-healing code' },
@@ -827,10 +827,57 @@ function renderToolCard(tc) {
   return card;
 }
 
+// ─── Mission / Factory Flow card (shown in Chat + Cockpit empty states) ───
+const MISSION_STEPS = [
+  { n:1, tab:'cockpit',  icon:'🛩', title:'Launch on a repo',        sub:'30-second triage across 7 scanners',               check:()=>!!(availableContext.cockpit?.available) },
+  { n:2, tab:'cockpit',  icon:'👁', title:'Verify findings visually', sub:'Click citations → open code viewer',               check:()=>false },
+  { n:3, tab:'chat',     icon:'💬', title:'@cockpit summarize',       sub:'LLM synthesizes — zero re-runs',                   check:()=>false },
+  { n:4, tab:'chat',     icon:'🎯', title:'Read the trust badge',     sub:'GROUNDED vs MOSTLY_HALLUCINATED',                  check:()=>false },
+  { n:5, tab:'chat',     icon:'📎', title:'Aggregate sources',        sub:'@whitehat @search cross-reference',                check:()=>!!(availableContext.whitehat?.available||availableContext.search?.available) },
+  { n:6, tab:'chat',     icon:'🔍', title:'Click citations',          sub:'Verify anything suspicious on disk',               check:()=>false },
+];
+
+function buildMissionCard() {
+  const wrap = h('div',{style:{width:'100%',maxWidth:'700px',marginBottom:'24px',padding:'16px 18px',borderRadius:'14px',border:'1px solid rgba(139,92,246,.25)',background:'linear-gradient(180deg,rgba(139,92,246,.06),rgba(139,92,246,.02))'}});
+  wrap.appendChild(h('div',{style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'4px'}},
+    h('span',{style:{fontSize:'14px'}},'🛩'),
+    h('span',{style:{fontSize:'12px',fontWeight:700,color:'var(--purple)',textTransform:'uppercase',letterSpacing:'.5px'}},'Mission · The Golden Flow'),
+  ));
+  wrap.appendChild(h('div',{style:{fontSize:'11px',color:'var(--fg3)',marginBottom:'12px'}},
+    'Drop a repo → triage → synthesize → verify. This is how Milli-Agent turns code into decisions.'));
+
+  const steps = h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px'}});
+  MISSION_STEPS.forEach(s => {
+    const done = s.check();
+    const row = h('div',{
+      style:{
+        display:'flex',alignItems:'center',gap:'8px',
+        padding:'6px 8px',borderRadius:'8px',
+        background: done ? 'rgba(34,197,94,.08)' : 'transparent',
+        border: done ? '1px solid rgba(34,197,94,.20)' : '1px solid transparent',
+        cursor:'pointer',
+      },
+      onClick:()=>{ state.tab = s.tab; render(); },
+    });
+    row.appendChild(h('div',{style:{width:'18px',height:'18px',borderRadius:'50%',background:done?'var(--green)':'rgba(255,255,255,.08)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'9px',fontWeight:800,color:done?'#0a0a0a':'var(--fg3)',flexShrink:0}}, done ? '✓' : String(s.n)));
+    row.appendChild(h('span',{style:{fontSize:'13px'}},s.icon));
+    row.appendChild(h('div',{style:{flex:1,minWidth:0}},
+      h('div',{style:{fontSize:'11px',fontWeight:600,color:'var(--fg)'}},s.title),
+      h('div',{style:{fontSize:'10px',color:'var(--fg3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},s.sub),
+    ));
+    steps.appendChild(row);
+  });
+  wrap.appendChild(steps);
+  return wrap;
+}
+
 function buildMsgList() {
   const inner = h('div',{className:'messages-inner'});
   if(state.msgs.length===0) {
     const empty = h('div',{className:'empty'});
+
+    // Mission / factory flow card
+    empty.appendChild(buildMissionCard());
 
     // Category cards — like OpenRouter's 2x2 grid
     const cardGrid = h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px',width:'100%',maxWidth:'600px',marginBottom:'32px'}});
@@ -876,7 +923,7 @@ function buildMsgList() {
       } else {
         const asst = h('div',{className:'msg-asst'});
         (msg.toolCalls||[]).forEach(tc => asst.appendChild(renderToolCard(tc)));
-        if(msg.content) { const b = h('div',{className:'bubble'}); b.innerHTML = mdToHtml(msg.content); asst.appendChild(b); }
+        if(msg.content) { const b = h('div',{className:'bubble'}); b.innerHTML = mdToHtml(msg.content); asst.appendChild(b); setTimeout(()=>attachCodeButtons(b),0); }
         if(msg.status) asst.appendChild(h('div',{className:'loading'},h('span',{className:'spinner'}),msg.status==='searching'?'Searching...':'Thinking...'));
         if(msg.stats) {
           const costStr = msg.stats.cost != null ? '$'+msg.stats.cost.toFixed(6) : '';
@@ -1036,9 +1083,22 @@ function mdToHtml(text) {
   // Escape HTML first
   let s = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
-  // Code fences ```lang\n...\n```
+  // Convert common LaTeX symbols to unicode
+  s = s.replace(/\$\\rightarrow\$/g, '→');
+  s = s.replace(/\$\\leftarrow\$/g, '←');
+  s = s.replace(/\$\\Rightarrow\$/g, '⇒');
+  s = s.replace(/\$\\Leftarrow\$/g, '⇐');
+  s = s.replace(/\$\\to\$/g, '→');
+  s = s.replace(/\$\\times\$/g, '×');
+  s = s.replace(/\$\\alpha\$/g, 'α');
+  s = s.replace(/\$\\beta\$/g, 'β');
+  s = s.replace(/\$\\sim\$/g, '~');
+
+  // Code fences ```lang\n...\n``` — emit with data-lang so we can attach ▶ Run / 📦 Deploy
   s = s.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => {
-    return '<pre><code>' + code.replace(/\n$/,'') + '</code></pre>';
+    const clean = code.replace(/\n$/,'');
+    const dataLang = (lang || '').toLowerCase();
+    return '<pre data-lang="' + dataLang + '"><code>' + clean + '</code></pre>';
   });
 
   // Inline code `...`
@@ -1053,13 +1113,13 @@ function mdToHtml(text) {
   // Horizontal rule
   s = s.replace(/^---+$/gm, '<hr>');
 
-  // Bold **...** and __...__
-  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  s = s.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+  // Bold **...** and __...__ — NO newlines allowed in match
+  s = s.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__([^_\n]+?)__/g, '<strong>$1</strong>');
 
   // Italic *...* (avoid matching bold) and _..._
-  s = s.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
-  s = s.replace(/(?<!_)_([^_\n]+)_(?!_)/g, '<em>$1</em>');
+  s = s.replace(/(?<!\*)\*([^*\n]+?)\*(?!\*)/g, '<em>$1</em>');
+  s = s.replace(/(?<!_)_([^_\n]+?)_(?!_)/g, '<em>$1</em>');
 
   // Links [text](url)
   s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
@@ -1129,11 +1189,228 @@ function chatAppendText(text) {
     chatTextTimer = null;
     if (chatPendingText !== null) {
       liveBubbleEl.innerHTML = mdToHtml(chatPendingText);
+      attachCodeButtons(liveBubbleEl);
       chatPendingText = null;
       const msgArea = document.getElementById('chat-messages');
       if (msgArea) msgArea.scrollTop = msgArea.scrollHeight;
     }
   }, 80);
+}
+
+// ─── ▶ Run / 📦 Deploy buttons on code blocks ───
+const RUNNABLE_LANGS = new Set(['js','ts','mjs','py','python','sh','bash']);
+const DEPLOYABLE_LANGS = new Set(['js','ts','mjs']);
+let sandboxConfig = null;
+async function getSandboxConfig() {
+  if (sandboxConfig) return sandboxConfig;
+  try { sandboxConfig = await (await fetch('/api/sandbox/config')).json(); } catch { sandboxConfig = { deploy: { configured: false } }; }
+  return sandboxConfig;
+}
+
+function attachCodeButtons(container) {
+  if (!container) return;
+  const pres = container.querySelectorAll('pre[data-lang]:not([data-wired])');
+  pres.forEach(pre => {
+    const lang = (pre.getAttribute('data-lang') || '').toLowerCase();
+    if (!RUNNABLE_LANGS.has(lang)) { pre.setAttribute('data-wired','1'); return; }
+    pre.setAttribute('data-wired','1');
+    pre.style.position = 'relative';
+    pre.style.paddingTop = '34px';
+
+    // Header bar
+    const bar = h('div',{style:{position:'absolute',top:0,left:0,right:0,height:'28px',display:'flex',alignItems:'center',gap:'6px',padding:'0 10px',background:'rgba(0,0,0,.25)',borderBottom:'1px solid rgba(255,255,255,.06)',borderTopLeftRadius:'8px',borderTopRightRadius:'8px'}});
+    bar.appendChild(h('span',{style:{fontSize:'10px',fontFamily:'monospace',color:'var(--fg3)',textTransform:'uppercase',letterSpacing:'.5px',fontWeight:700}},lang));
+    bar.appendChild(h('div',{style:{flex:1}}));
+
+    const runBtn = h('button',{
+      style:{padding:'3px 10px',borderRadius:'6px',border:'1px solid rgba(34,197,94,.35)',background:'rgba(34,197,94,.10)',color:'var(--green)',fontSize:'10px',fontWeight:700,cursor:'pointer'},
+      title:'Run in macOS sandbox (network denied, 10s timeout)',
+      onClick: (e) => { e.stopPropagation(); runCodeBlock(pre, lang); },
+    },'▶ Run');
+    bar.appendChild(runBtn);
+
+    const healBtn = h('button',{
+      style:{padding:'3px 10px',borderRadius:'6px',border:'1px solid rgba(245,158,11,.35)',background:'rgba(245,158,11,.10)',color:'#f59e0b',fontSize:'10px',fontWeight:700,cursor:'pointer'},
+      title:'Self-Heal: run, if exit≠0 ask LLM to patch, retry up to 5 times',
+      onClick: (e) => { e.stopPropagation(); selfHealCodeBlock(pre, lang); },
+    },'🔁 Heal');
+    bar.appendChild(healBtn);
+
+    if (DEPLOYABLE_LANGS.has(lang)) {
+      const deployBtn = h('button',{
+        style:{padding:'3px 10px',borderRadius:'6px',border:'1px solid rgba(139,92,246,.35)',background:'rgba(139,92,246,.10)',color:'var(--purple)',fontSize:'10px',fontWeight:700,cursor:'pointer'},
+        title:'Deploy to Cloudflare Workers (JS/TS only) · Shift+Click to (re)name',
+        onClick: async (e) => {
+          e.stopPropagation();
+          const cfg = await getSandboxConfig();
+          if (!cfg.deploy?.configured) {
+            showOutputPanel(pre, 'err', 'Deploy not configured. Set CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID in the server env and restart.');
+            return;
+          }
+          deployCodeBlock(pre, lang, { rename: e.shiftKey });
+        },
+      },'📦 Deploy');
+      bar.appendChild(deployBtn);
+    }
+    pre.insertBefore(bar, pre.firstChild);
+  });
+}
+
+function showOutputPanel(pre, kind, text) {
+  let panel = pre.nextElementSibling;
+  if (!panel || !panel.classList?.contains('sbx-out')) {
+    panel = h('div',{className:'sbx-out',style:{margin:'-4px 0 10px 0',padding:'10px 12px',borderRadius:'0 0 10px 10px',background:'var(--bg2)',border:'1px solid var(--border)',borderTop:'none',fontFamily:'JetBrains Mono, monospace',fontSize:'11px',lineHeight:'1.5',whiteSpace:'pre-wrap',color:'var(--fg2)',maxHeight:'280px',overflowY:'auto'}});
+    pre.insertAdjacentElement('afterend', panel);
+  }
+  if (kind === 'reset') { panel.innerHTML = ''; return panel; }
+  const color = kind === 'err' ? '#ef4444' : kind === 'ok' ? 'var(--green)' : kind === 'meta' ? 'var(--fg3)' : 'var(--fg2)';
+  const span = document.createElement('span');
+  span.style.color = color;
+  span.textContent = text;
+  panel.appendChild(span);
+  panel.scrollTop = panel.scrollHeight;
+  return panel;
+}
+
+async function runCodeBlock(pre, lang) {
+  const codeEl = pre.querySelector('code');
+  const code = codeEl ? codeEl.textContent : pre.textContent;
+  const panel = showOutputPanel(pre, 'reset');
+  showOutputPanel(pre, 'meta', '▶ running in sandbox-exec...\n');
+  try {
+    const resp = await fetch('/api/sandbox/run', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ code, language: lang, timeout: 10000 }),
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let leftover = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) leftover += decoder.decode(value, { stream: true });
+      if (done) leftover += decoder.decode();
+      let idx;
+      while ((idx = leftover.indexOf('\n\n')) !== -1) {
+        const block = leftover.slice(0, idx);
+        leftover = leftover.slice(idx + 2);
+        let evt = null, data = null;
+        for (const line of block.split('\n')) {
+          if (line.startsWith('event: ')) evt = line.slice(7).trim();
+          else if (line.startsWith('data: ')) data = line.slice(6);
+        }
+        if (!evt || !data) continue;
+        let d; try { d = JSON.parse(data); } catch { continue; }
+        if (evt === 'stdout') showOutputPanel(pre, 'out', d.chunk);
+        else if (evt === 'stderr') showOutputPanel(pre, 'err', d.chunk);
+        else if (evt === 'exit') {
+          const mark = d.timedOut ? '⏱ timeout' : (d.exitCode === 0 ? '✓ exit 0' : '✗ exit '+d.exitCode);
+          showOutputPanel(pre, d.exitCode === 0 ? 'ok' : 'err', '\n— '+mark+'  ·  '+d.elapsedMs+' ms\n');
+        }
+        else if (evt === 'error') showOutputPanel(pre, 'err', '\nserver error: '+d.message+'\n');
+      }
+      if (done) break;
+    }
+  } catch (e) {
+    showOutputPanel(pre, 'err', '\nfetch failed: '+e.message);
+  }
+}
+
+async function selfHealCodeBlock(pre, lang) {
+  const codeEl = pre.querySelector('code');
+  const code = codeEl ? codeEl.textContent : pre.textContent;
+  showOutputPanel(pre, 'reset');
+  showOutputPanel(pre, 'meta', '🔁 self-heal loop starting...\n');
+  try {
+    const resp = await fetch('/api/sandbox/self-heal', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ code, language: lang, max_attempts: 5 }),
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let leftover = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) leftover += decoder.decode(value, { stream: true });
+      if (done) leftover += decoder.decode();
+      let idx;
+      while ((idx = leftover.indexOf('\n\n')) !== -1) {
+        const block = leftover.slice(0, idx);
+        leftover = leftover.slice(idx + 2);
+        let evt = null, data = null;
+        for (const line of block.split('\n')) {
+          if (line.startsWith('event: ')) evt = line.slice(7).trim();
+          else if (line.startsWith('data: ')) data = line.slice(6);
+        }
+        if (!evt || !data) continue;
+        let d; try { d = JSON.parse(data); } catch { continue; }
+        if (evt === 'iteration') {
+          showOutputPanel(pre, 'meta', `\n[#${d.n}] ${d.phase}: ${d.detail || (d.codePreview || '').slice(0, 60)}\n`);
+        } else if (evt === 'stdout') {
+          showOutputPanel(pre, 'out', d.chunk);
+        } else if (evt === 'stderr') {
+          showOutputPanel(pre, 'err', d.chunk);
+        } else if (evt === 'exit') {
+          const mark = d.timedOut ? '⏱ timeout' : (d.code === 0 ? '✓ exit 0' : '✗ exit ' + d.code);
+          showOutputPanel(pre, d.code === 0 ? 'ok' : 'err', `\n— iter#${d.n} ${mark} (${d.elapsed}ms)\n`);
+        } else if (evt === 'patch') {
+          showOutputPanel(pre, 'meta', `\n📝 patch (${d.diff_summary})\n`);
+          // Update the code block in place so the user sees the new version
+          if (codeEl) codeEl.textContent = d.newCode;
+        } else if (evt === 'done') {
+          const status = d.status === 'passed' ? 'ok' : 'err';
+          showOutputPanel(pre, status, `\n=== ${d.status.toUpperCase()} after ${d.attempts} attempts (${d.elapsedMs}ms) ===\n`);
+          if (d.finalStdout) showOutputPanel(pre, 'out', d.finalStdout);
+          if (d.reason) showOutputPanel(pre, 'err', '\n' + d.reason);
+        }
+      }
+      if (done) break;
+    }
+  } catch (e) {
+    showOutputPanel(pre, 'err', '\nfetch failed: ' + e.message);
+  }
+}
+
+async function deployCodeBlock(pre, lang, opts = {}) {
+  const codeEl = pre.querySelector('code');
+  const code = codeEl ? codeEl.textContent : pre.textContent;
+  // Persistent name: pre.dataset.deployName survives re-deploys → same workers.dev URL
+  const previousName = pre.dataset.deployName || '';
+  let name = previousName;
+  // First deploy → prompt. Subsequent deploys reuse silently. Shift+Click forces a rename.
+  if (!name || opts.rename) {
+    name = window.prompt('Worker name (lowercase, dashes ok). Leave blank for random.', previousName || '') || '';
+    name = name.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  }
+  showOutputPanel(pre, 'reset');
+  showOutputPanel(pre, 'meta', `📦 uploading to Cloudflare Workers${name ? ' as "'+name+'"' : ''}...\n`);
+  try {
+    const resp = await fetch('/api/sandbox/deploy', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ code, language: lang, name: name || undefined }),
+    });
+    const j = await resp.json();
+    if (!resp.ok) {
+      showOutputPanel(pre, 'err', 'deploy failed: '+(j.error||'unknown')+(j.hint?'\nhint: '+j.hint:''));
+      return;
+    }
+    // Pin the name on the code block so subsequent deploys re-use it
+    pre.dataset.deployName = j.name;
+    // Update the deploy button label to indicate the pinned name
+    const deployBtn = Array.from(pre.querySelectorAll('button')).find(b => b.textContent.includes('Deploy'));
+    if (deployBtn) {
+      deployBtn.textContent = '📌 ' + j.name;
+      deployBtn.title = 'Re-deploy as "' + j.name + '" (Shift+Click to rename)';
+    }
+    showOutputPanel(pre, 'ok', '✓ deployed as "'+j.name+'" ('+j.elapsedMs+' ms)\n');
+    if (j.url) {
+      const panel = showOutputPanel(pre, 'meta', '');
+      const link = h('a',{href:j.url,target:'_blank',rel:'noopener',style:{color:'var(--purple)',textDecoration:'underline',fontWeight:700}},j.url);
+      panel.appendChild(link);
+      panel.appendChild(document.createTextNode('\n'));
+    }
+  } catch (e) {
+    showOutputPanel(pre, 'err', 'fetch failed: '+e.message);
+  }
 }
 
 function chatFinish(stats) {
@@ -1156,6 +1433,21 @@ function chatFinish(stats) {
   liveChatEl = null;
   liveBubbleEl = null;
   liveToolEls = [];
+  // Refresh available context strip — fresh runs from this turn may now be attachable
+  refreshContextStrip();
+}
+
+function chatShowMentions(d) {
+  if (!liveChatEl) return;
+  const injected = d.injected || [];
+  const missing = d.missing || [];
+  if (injected.length === 0 && missing.length === 0) return;
+  const bar = h('div',{style:{display:'flex',alignItems:'center',gap:'6px',padding:'6px 10px',marginTop:'6px',borderRadius:'8px',background:'rgba(139,92,246,.08)',border:'1px solid rgba(139,92,246,.25)',fontSize:'10px',color:'var(--purple)',fontWeight:600}},
+    h('span',null,'📎 attached:'),
+    ...injected.map(s => h('span',{style:{padding:'2px 8px',borderRadius:'10px',background:'rgba(139,92,246,.18)'}},'@'+s)),
+    ...missing.map(s => h('span',{style:{padding:'2px 8px',borderRadius:'10px',background:'rgba(239,68,68,.15)',color:'#ef4444'}},'@'+s+' (no run)')),
+  );
+  liveChatEl.insertBefore(bar, liveChatEl.firstChild);
 }
 
 function updateChatMessages() {
@@ -1179,6 +1471,150 @@ function updateSendBtn() {
   if (chatInput) chatInput.disabled = state.sending;
 }
 
+// ─── @-mention context attachment ─────────────────────────────────────
+const MENTION_SOURCES = [
+  { id:'cockpit',  icon:'🛩', label:'cockpit',  desc:'Mission Control run' },
+  { id:'whitehat', icon:'🛡', label:'whitehat', desc:'Security audit' },
+  { id:'search',   icon:'🔍', label:'search',   desc:'Last grep result' },
+  { id:'compare',  icon:'🏎', label:'compare',  desc:'Race result' },
+  { id:'api',      icon:'📡', label:'api',      desc:'OpenAPI search' },
+  { id:'heal',     icon:'🧬', label:'heal',     desc:'Self-heal diagnosis' },
+];
+let availableContext = {}; // { cockpit:{available,age,summary}, ... }
+let mentionSelectedIdx = 0;
+let mentionFiltered = [];
+
+async function refreshContextStrip() {
+  try {
+    const r = await fetch('/api/context');
+    availableContext = await r.json();
+  } catch {}
+  const strip = document.getElementById('ctx-strip');
+  if (!strip) return;
+  strip.innerHTML = '';
+  strip.appendChild(h('span',{style:{color:'var(--fg3)'}},'@ context:'));
+  MENTION_SOURCES.forEach(src => {
+    const ctx = availableContext[src.id] || {};
+    const ok = !!ctx.available;
+    const chip = h('button',{
+      style:{
+        display:'flex',alignItems:'center',gap:'4px',
+        padding:'3px 8px',borderRadius:'10px',
+        border:'1px solid '+(ok?'rgba(139,92,246,.35)':'var(--border)'),
+        background: ok?'rgba(139,92,246,.10)':'transparent',
+        color: ok?'var(--purple)':'var(--fg3)',
+        fontSize:'10px',fontWeight:600,cursor:ok?'pointer':'default',
+        opacity: ok?1:0.45,
+      },
+      title: ok ? (src.desc + ' · ' + (ctx.age||'')) : src.desc + ' (no run yet)',
+      onClick: ()=>{ if (!ok) return; insertMentionAtCursor(src.id); },
+    },
+      h('span',null,src.icon),
+      h('span',null,'@'+src.label),
+      ok && ctx.age ? h('span',{style:{color:'var(--fg3)',fontWeight:400}},ctx.age) : null,
+    );
+    strip.appendChild(chip);
+  });
+}
+
+function insertMentionAtCursor(sourceId) {
+  if (!chatInput) return;
+  const tag = '@' + sourceId + ' ';
+  const pos = chatInput.selectionStart;
+  const before = chatInput.value.slice(0, pos);
+  const after = chatInput.value.slice(pos);
+  chatInput.value = before + tag + after;
+  chatInput.selectionStart = chatInput.selectionEnd = pos + tag.length;
+  state.input = chatInput.value;
+  chatInput.focus();
+  closeMentionDropdown();
+  updateSendBtn();
+}
+
+function handleMentionAutocomplete(textarea) {
+  const pos = textarea.selectionStart;
+  const before = textarea.value.slice(0, pos);
+  const m = before.match(/@(\w*)$/);
+  if (!m) { closeMentionDropdown(); return; }
+  const q = m[1].toLowerCase();
+  mentionFiltered = MENTION_SOURCES.filter(s => s.id.startsWith(q));
+  if (mentionFiltered.length === 0) { closeMentionDropdown(); return; }
+  mentionSelectedIdx = 0;
+  showMentionDropdown(textarea);
+}
+
+function showMentionDropdown(textarea) {
+  closeMentionDropdown();
+  const dd = h('div',{id:'mention-dropdown',style:{
+    position:'absolute',
+    background:'var(--bg2)',
+    border:'1px solid var(--border)',
+    borderRadius:'10px',
+    padding:'4px',
+    minWidth:'280px',
+    boxShadow:'0 8px 24px rgba(0,0,0,.5)',
+    zIndex:9999,
+    fontSize:'12px',
+  }});
+  mentionFiltered.forEach((src, i) => {
+    const ctx = availableContext[src.id] || {};
+    const ok = !!ctx.available;
+    const item = h('div',{
+      style:{
+        display:'flex',alignItems:'center',gap:'8px',
+        padding:'8px 10px',borderRadius:'6px',cursor:'pointer',
+        background: i === mentionSelectedIdx ? 'rgba(139,92,246,.15)' : 'transparent',
+        color: ok ? 'var(--fg)' : 'var(--fg3)',
+        opacity: ok ? 1 : 0.55,
+      },
+      onMousedown:(e)=>{ e.preventDefault(); insertMentionAtCursor(src.id); },
+    },
+      h('span',{style:{fontSize:'14px'}},src.icon),
+      h('div',{style:{flex:1}},
+        h('div',{style:{fontWeight:600}},'@'+src.label, ok ? ' ✓' : ' (no run yet)'),
+        h('div',{style:{fontSize:'10px',color:'var(--fg3)'}}, ok ? (ctx.summary || src.desc) : src.desc),
+      ),
+      ok && ctx.age ? h('span',{style:{fontSize:'10px',color:'var(--fg3)',fontFamily:'monospace'}},ctx.age) : null,
+    );
+    dd.appendChild(item);
+  });
+  // Position above the textarea
+  const rect = textarea.getBoundingClientRect();
+  dd.style.left = rect.left + 'px';
+  dd.style.top = (rect.top - 8) + 'px';
+  dd.style.transform = 'translateY(-100%)';
+  document.body.appendChild(dd);
+}
+
+function closeMentionDropdown() {
+  const dd = document.getElementById('mention-dropdown');
+  if (dd) dd.remove();
+}
+
+function handleMentionKey(key) {
+  if (key === 'Escape') { closeMentionDropdown(); return; }
+  if (key === 'ArrowDown') { mentionSelectedIdx = (mentionSelectedIdx + 1) % mentionFiltered.length; }
+  else if (key === 'ArrowUp') { mentionSelectedIdx = (mentionSelectedIdx - 1 + mentionFiltered.length) % mentionFiltered.length; }
+  else if (key === 'Enter' || key === 'Tab') {
+    const sel = mentionFiltered[mentionSelectedIdx];
+    if (sel) {
+      // Replace the partial @xxx token at cursor with the full @id
+      const pos = chatInput.selectionStart;
+      const before = chatInput.value.slice(0, pos);
+      const after = chatInput.value.slice(pos);
+      const newBefore = before.replace(/@\w*$/, '@' + sel.id + ' ');
+      chatInput.value = newBefore + after;
+      chatInput.selectionStart = chatInput.selectionEnd = newBefore.length;
+      state.input = chatInput.value;
+      closeMentionDropdown();
+      updateSendBtn();
+      return;
+    }
+  }
+  // Re-render dropdown with new selected idx
+  showMentionDropdown(chatInput);
+}
+
 function renderChat() {
   const main = h('div',{className:'main'});
 
@@ -1199,7 +1635,7 @@ function renderChat() {
 
   chatInput = document.createElement('textarea');
   chatInput.rows = 1;
-  chatInput.placeholder = 'Ask Milli-Agent anything... (paste a GitHub URL to clone and analyze)';
+  chatInput.placeholder = 'Ask Milli-Agent anything... type @ to attach context from another tab';
   chatInput.value = state.input;
   chatInput.style.cssText = 'width:100%;resize:none;border:none;background:transparent;padding:14px 16px 8px;font-size:14px;color:var(--fg);outline:none;font-family:inherit;line-height:1.5;';
   chatInput.addEventListener('input', e => {
@@ -1207,11 +1643,24 @@ function renderChat() {
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
     updateSendBtn();
+    handleMentionAutocomplete(e.target);
   });
   chatInput.addEventListener('keydown', e => {
+    // Mention dropdown navigation
+    const dd = document.getElementById('mention-dropdown');
+    if (dd && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === 'Tab' || e.key === 'Escape')) {
+      e.preventDefault();
+      handleMentionKey(e.key);
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
   });
   inputBox.appendChild(chatInput);
+
+  // Available context strip — shows what's attachable
+  const ctxStrip = h('div',{id:'ctx-strip',style:{display:'flex',alignItems:'center',gap:'6px',padding:'6px 12px',borderTop:'1px solid rgba(255,255,255,.03)',fontSize:'10px',color:'var(--fg3)',flexWrap:'wrap'}});
+  inputBox.appendChild(ctxStrip);
+  refreshContextStrip();
 
   // Toolbar row — model selector, server, send button
   const toolbar = h('div',{style:{display:'flex',alignItems:'center',gap:'8px',padding:'4px 10px 8px',borderTop:'1px solid rgba(255,255,255,.03)'}});
@@ -1276,6 +1725,16 @@ async function sendChat() {
 
   // Directly manipulate DOM — no full rebuild
   chatAddUserMsg(content);
+
+  // Multi-model lane mode: when >1 model selected, fan out and render side-by-side lanes
+  const models = (state.activeModels && state.activeModels.length > 0) ? state.activeModels : [state.model];
+  if (models.length > 1) {
+    await sendChatMulti(content, models);
+    state.sending = false;
+    updateSendBtn();
+    return;
+  }
+
   chatStartAssistant();
 
   state.msgs.push({role:'user', content});
@@ -1315,6 +1774,7 @@ async function sendChat() {
             else if (eventType === 'tool_result') { for(let i=tcs.length-1;i>=0;i--){if(!tcs[i].result){tcs[i].result={elapsed:d.elapsed,bytes:d.bytes,matchCount:d.matchCount,preview:d.preview};break;}} last().toolCalls=[...tcs]; chatUpdateToolResult(d); chatUpdateStatus('thinking'); }
             else if (eventType === 'text_delta') { text+=d.content; last().content=text; chatUpdateStatus(null); chatAppendText(text); }
             else if (eventType === 'text_done') { last().content=d.content; last().stats=d.stats; if(d.stats?.sessionCost) state.sessionCost=d.stats.sessionCost; chatUpdateStatus(null); chatAppendText(d.content); chatFinish(d.stats); refreshNav(); }
+            else if (eventType === 'mentions') { last().mentions=d; chatShowMentions(d); }
             else if (eventType === 'verification') { last().verification=d; chatShowVerification(d); }
             else if (eventType === 'error') { last().content='Error: '+(d.message||'Unknown'); chatUpdateStatus(null); chatAppendText('Error: '+(d.message||'Unknown')); chatFinish(null); }
           } catch(parseErr) { /* skip */ }
@@ -1331,6 +1791,145 @@ async function sendChat() {
 
   state.sending = false;
   updateSendBtn();
+}
+
+// Multi-model fan-out: same prompt to N models in parallel, N lanes side-by-side.
+async function sendChatMulti(content, models) {
+  const msgArea = document.getElementById('chat-messages');
+  if (!msgArea) return;
+  let inner = msgArea.querySelector('.messages-inner');
+  if (!inner) { inner = h('div',{className:'messages-inner'}); msgArea.appendChild(inner); }
+  const empty = inner.querySelector('.empty');
+  if (empty) empty.remove();
+
+  // Build the grid container
+  const cols = models.length <= 2 ? 'repeat('+models.length+',1fr)' : 'repeat(2,1fr)';
+  const grid = h('div',{className:'anim',style:{display:'grid',gridTemplateColumns:cols,gap:'12px',marginTop:'6px'}});
+  inner.appendChild(grid);
+  msgArea.scrollTop = msgArea.scrollHeight;
+
+  // Build one lane per model, capture local refs
+  const lanes = {};
+  models.forEach(mid => {
+    const m = state.models.find(x => x.id === mid) || { id: mid, name: mid.split('/').pop() };
+    const lane = h('div',{style:{borderRadius:'12px',border:'1px solid var(--border)',background:'var(--bg2)',overflow:'hidden',display:'flex',flexDirection:'column',minHeight:'120px'}});
+    const header = h('div',{style:{padding:'8px 12px',borderBottom:'1px solid var(--bg3)',display:'flex',alignItems:'center',gap:'8px',borderTop:'2px solid var(--purple)'}},
+      h('span',{style:{fontSize:'12px',fontWeight:700,color:'var(--purple)'}},m.name || mid),
+      h('span',{id:'lane-status-'+mid.replace(/[^a-z0-9]/gi,'_'),style:{fontSize:'10px',color:'var(--fg3)',marginLeft:'auto'}},'thinking…'),
+    );
+    const toolEls = h('div',{style:{padding:'4px 10px'}});
+    const body = h('div',{className:'bubble',style:{padding:'10px 14px',fontSize:'13px',lineHeight:'1.55',color:'var(--fg)',whiteSpace:'pre-wrap'}});
+    const mentionsEl = h('div',{style:{padding:'0 10px'}});
+    const verifyEl = h('div',{style:{padding:'0 10px 8px'}});
+    const statsEl = h('div',{style:{padding:'6px 12px',borderTop:'1px solid var(--bg3)',fontSize:'10px',color:'var(--fg3)',fontFamily:'monospace',display:'none'}});
+    lane.append(header, mentionsEl, toolEls, body, verifyEl, statsEl);
+    grid.appendChild(lane);
+    lanes[mid] = { lane, header, toolEls, body, mentionsEl, verifyEl, statsEl, statusSpan: header.querySelector('span[id^=lane-status-]'), tcs: [], text: '', done: false, stats: null };
+  });
+
+  // Persist history only from the user-side (no assistant msgs until we pick a canonical winner)
+  state.msgs.push({role:'user', content});
+  const history = state.msgs.filter(m => m.role==='user' || (m.role==='assistant' && m.content)).slice(0,-1).map(m => ({role:m.role, content:m.content}));
+
+  const completions = {};
+  let completedCount = 0;
+
+  await Promise.all(models.map(async (modelId) => {
+    const l = lanes[modelId];
+    const setStatus = (txt) => { if (l.statusSpan) l.statusSpan.textContent = txt; };
+    try {
+      const response = await fetch('/api/chat/stream', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ message: content, model: modelId, impl: state.impl, history }),
+      });
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let leftover = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (value) leftover += decoder.decode(value, { stream: true });
+        if (done) leftover += decoder.decode();
+        let idx;
+        while ((idx = leftover.indexOf('\n\n')) !== -1) {
+          const block = leftover.slice(0, idx);
+          leftover = leftover.slice(idx + 2);
+          let evt = null, data = null;
+          for (const line of block.split('\n')) {
+            if (line.startsWith('event: ')) evt = line.slice(7).trim();
+            else if (line.startsWith('data: ')) data = line.slice(6);
+          }
+          if (!evt || !data) continue;
+          let d; try { d = JSON.parse(data); } catch { continue; }
+          if (evt === 'status') setStatus(d.type === 'calling_llm' ? 'calling…' : d.type);
+          else if (evt === 'tool_call') {
+            l.tcs.push({ name:d.name, args:d.args, impl:d.impl });
+            setStatus('→ '+d.name);
+            const tcEl = h('div',{style:{fontSize:'10px',color:'var(--fg3)',fontFamily:'monospace',padding:'2px 0'}},'→ '+d.name+'('+(Object.values(d.args||{})[0]||'').toString().slice(0,40)+')');
+            l.toolEls.appendChild(tcEl);
+          }
+          else if (evt === 'tool_result') setStatus('thinking…');
+          else if (evt === 'text_delta') { l.text += d.content; l.body.innerHTML = mdToHtml(l.text); attachCodeButtons(l.body); }
+          else if (evt === 'text_done') {
+            l.text = d.content || l.text;
+            l.body.innerHTML = mdToHtml(l.text);
+            attachCodeButtons(l.body);
+            l.stats = d.stats;
+            l.done = true;
+            setStatus('done');
+            if (d.stats) {
+              l.statsEl.style.display = '';
+              const costStr = d.stats.cost != null ? ' · $'+d.stats.cost.toFixed(6) : '';
+              l.statsEl.textContent = fmt(d.stats.totalMs)+' · '+d.stats.toolCalls+' calls · '+d.stats.inTokens+'+'+d.stats.outTokens+' tok'+costStr;
+            }
+            completions[modelId] = d.stats?.totalMs || 999999;
+            completedCount++;
+          }
+          else if (evt === 'mentions') {
+            const bar = h('div',{style:{display:'flex',alignItems:'center',gap:'4px',padding:'4px 0',fontSize:'10px',color:'var(--purple)',fontWeight:600}},
+              h('span',null,'📎'),
+              ...(d.injected||[]).map(s => h('span',{style:{padding:'1px 6px',borderRadius:'8px',background:'rgba(139,92,246,.15)'}},'@'+s)),
+              ...(d.missing||[]).map(s => h('span',{style:{padding:'1px 6px',borderRadius:'8px',background:'rgba(239,68,68,.15)',color:'#ef4444'}},'@'+s+' (no run)')),
+            );
+            l.mentionsEl.appendChild(bar);
+          }
+          else if (evt === 'verification') {
+            const label = d.label || 'unverified';
+            const color = label.includes('GROUNDED') ? 'var(--green)' : label.includes('LOW') ? '#f59e0b' : '#ef4444';
+            l.verifyEl.innerHTML = '';
+            l.verifyEl.appendChild(h('div',{style:{fontSize:'10px',fontWeight:700,color,padding:'4px 0'}},
+              '🎯 '+label+(d.score != null ? ' · '+Math.round(d.score*100)+'%' : ''),
+            ));
+          }
+          else if (evt === 'error') {
+            l.body.textContent = 'Error: ' + (d.message || 'unknown');
+            setStatus('error');
+            l.done = true; completedCount++;
+          }
+        }
+        if (done) break;
+      }
+    } catch (e) {
+      l.body.textContent = 'Error: ' + e.message;
+      setStatus('error');
+    }
+  }));
+
+  // Crown the fastest
+  const ids = Object.keys(completions);
+  if (ids.length > 1) {
+    const winnerId = ids.sort((a,b) => completions[a] - completions[b])[0];
+    const winner = lanes[winnerId];
+    if (winner) {
+      winner.header.style.borderTop = '2px solid var(--green)';
+      const crown = h('span',{style:{fontSize:'9px',fontWeight:700,color:'var(--green)',padding:'1px 6px',borderRadius:'5px',background:'rgba(34,197,94,.12)',marginLeft:'6px'}},'⚡ FASTEST');
+      winner.header.insertBefore(crown, winner.header.lastChild);
+    }
+  }
+
+  // Store the best (or first) response as the canonical assistant message in history
+  const canonical = lanes[models[0]];
+  state.msgs.push({ role:'assistant', content: canonical?.text || '', toolCalls: canonical?.tcs || [], stats: canonical?.stats, multi: true });
+  refreshContextStrip();
 }
 
 // ═══ SEARCH TAB — instant results, optional AI analysis ═══
@@ -1561,295 +2160,6 @@ async function runAnalysis() {
   searchState.analyzing = false;
   const finalArea = document.getElementById('search-results');
   if (finalArea) renderSearchResults(finalArea);
-}
-
-// Compare state
-let compareInput = null;
-let cmpState = { input: '', sending: false, userMsg: '', results: {}, repoUrl: 'https://github.com/walter-grace/milli-agent' };
-
-function renderCompare() {
-  const div = h('div',{style:{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden'}});
-
-  // Header
-  const header = h('div',{style:{padding:'16px 24px 12px',flexShrink:0,borderBottom:'1px solid var(--border)'}});
-  header.appendChild(h('h2',{style:{fontSize:'16px',fontWeight:700,marginBottom:'4px'}},'Compare — Race All Servers'));
-  header.appendChild(h('p',{style:{fontSize:'12px',color:'var(--fg3)',marginBottom:'12px'}},'Same prompt runs through all MCP servers simultaneously. Compare speed, accuracy, and token efficiency.'));
-
-  header.appendChild(h('p',{style:{fontSize:'11px',color:'var(--fg3)',marginBottom:'8px'}},'Add models with the + button in the top bar. Each model races all MCP servers.'));
-
-  // Preset chips
-  const chips = h('div',{style:{display:'flex',flexWrap:'wrap',gap:'6px'}});
-  [
-    ['Security review milli-agent','Clone https://github.com/walter-grace/milli-agent and run deep_security_scan then secrets_scan'],
-    ['Find TODOs in milli-agent','Clone https://github.com/walter-grace/milli-agent and find all TODO comments'],
-    ['Analyze Express.js','Clone https://github.com/expressjs/express and run repo_summary then knowledge_graph depth=2'],
-    ['Search exo for errors','Clone https://github.com/exo-explore/exo and search for error handling'],
-  ].forEach(([label,prompt]) => {
-    chips.appendChild(h('button',{className:'pre',onClick:()=>{ cmpState.input=prompt; if(compareInput) compareInput.value=prompt; }},label));
-  });
-  header.appendChild(chips);
-  div.appendChild(header);
-
-  // Results area
-  const resultsArea = h('div',{id:'compare-results',style:{flex:1,overflowY:'auto',padding:'16px 24px'}});
-
-  if (cmpState.userMsg) {
-    resultsArea.appendChild(h('div',{style:{marginBottom:'16px',padding:'10px 14px',background:'var(--fg)',color:'var(--bg)',borderRadius:'12px',maxWidth:'70%',marginLeft:'auto',fontSize:'14px'}},cmpState.userMsg));
-  }
-
-  if (Object.keys(cmpState.results).length > 0) {
-    const cols = Object.keys(cmpState.results).length <= 2 ? '1fr 1fr' : Object.keys(cmpState.results).length <= 4 ? '1fr 1fr' : '1fr 1fr 1fr';
-    const grid = h('div',{style:{display:'grid',gridTemplateColumns:cols,gap:'12px'}});
-    Object.entries(cmpState.results).forEach(([id, r]) => {
-      const modelName = r?.modelName || id.split('/').pop();
-      const modelColor = r?.fastest ? 'var(--green)' : 'var(--purple)';
-      const card = h('div',{className:'rcard anim',style:{borderColor:r?.fastest?'var(--green)':'var(--border)'}});
-      // Header
-      const hd = h('div',{className:'rhead',style:{borderTop:'2px solid '+modelColor}});
-      hd.appendChild(h('span',{style:{fontSize:'12px',fontWeight:600,color:modelColor}},modelName));
-      if(r?.stats) { hd.appendChild(h('span',{style:{fontSize:'11px',fontFamily:'monospace',color:r.fastest?'var(--green)':'var(--fg3)',marginLeft:'8px'}},fmt(r.stats.totalMs))); hd.appendChild(h('span',{style:{marginLeft:'auto',fontSize:'10px',color:'var(--fg3)'}},r.stats.inTokens+'+'+r.stats.outTokens+' tok')); }
-      if(r?.stats?.cost) hd.appendChild(h('span',{style:{fontSize:'10px',fontWeight:600,color:'var(--green)',marginLeft:'6px'}},'$'+r.stats.cost.toFixed(5)));
-      if(r?.fastest) hd.appendChild(h('span',{style:{fontSize:'10px',fontWeight:700,color:'var(--green)',marginLeft:'6px'}},'FASTEST'));
-      card.appendChild(hd);
-
-      // Body
-      const body = h('div',{style:{padding:'10px',maxHeight:'350px',overflowY:'auto'}});
-      if(!r) { body.appendChild(h('div',{style:{color:'var(--fg3)',fontSize:'12px',textAlign:'center',padding:'30px'}},'Waiting...')); }
-      else if(r.status) { body.appendChild(h('div',{style:{display:'flex',alignItems:'center',gap:'8px',color:'var(--fg3)',fontSize:'12px',padding:'20px',justifyContent:'center'}},h('span',{className:'spinner'}),r.status==='searching'?'Searching...':'Thinking...')); }
-      else {
-        (r.toolCalls||[]).forEach(tc => {
-          const tcEl = h('div',{style:{marginBottom:'8px',border:'1px solid var(--bg3)',borderRadius:'8px',overflow:'hidden'}});
-          tcEl.appendChild(h('div',{style:{padding:'4px 8px',background:'rgba(0,0,0,0.2)',color:'var(--fg2)',display:'flex',alignItems:'center',gap:'6px',fontSize:'11px'}},
-            h('span',{style:{color:'var(--purple)'}},'▶'),
-            h('code',{style:{color:'var(--purple)'}},tc.name||'tool'),
-            tc.result?h('span',{style:{marginLeft:'auto',color:'var(--green)',fontFamily:'monospace',fontWeight:600,fontSize:'10px'}},fmt(tc.result.elapsed)+' · '+tc.result.matchCount+' hits'):h('span',{className:'spinner'}),
-          ));
-          if(tc.result?.preview) { const ls=h('div',{style:{maxHeight:'100px',overflowY:'auto',fontSize:'11px',fontFamily:'monospace'}}); tc.result.preview.slice(0,6).forEach(l=>{const p=l.split(':');ls.appendChild(h('div',{className:'tc-line'},h('span',{className:'tc-f'},p[0]?.split('/').pop()||''),h('span',{className:'tc-n'},p[1]||''),h('span',{className:'tc-c'},p.slice(2).join(':'))));});tcEl.appendChild(ls); }
-          body.appendChild(tcEl);
-        });
-        if(r.content) body.appendChild(h('div',{style:{fontSize:'12px',lineHeight:'1.5',whiteSpace:'pre-wrap',color:'var(--fg2)',marginTop:'6px'}},r.content.slice(0,500)+(r.content.length>500?'...':'')));
-      }
-      card.appendChild(body);
-      grid.appendChild(card);
-    });
-    resultsArea.appendChild(grid);
-  } else if(!cmpState.userMsg) {
-    resultsArea.appendChild(h('div',{style:{textAlign:'center',color:'var(--fg3)',paddingTop:'60px',fontSize:'14px'}},'Add models with + above, then send a message to race them'));
-  }
-  div.appendChild(resultsArea);
-
-  // Input
-  const inputArea = h('div',{style:{padding:'12px 24px 16px',borderTop:'1px solid var(--border)',flexShrink:0}});
-  const wrap = h('div',{style:{position:'relative'}});
-  compareInput = document.createElement('textarea');
-  compareInput.rows = 1;
-  compareInput.placeholder = 'Ask all 4 servers simultaneously...';
-  compareInput.value = cmpState.input;
-  compareInput.style.cssText = 'width:100%;resize:none;border-radius:12px;border:1px solid var(--border);background:var(--bg2);padding:12px 56px 12px 16px;font-size:14px;color:var(--fg);outline:none;font-family:inherit;line-height:1.5;';
-  compareInput.addEventListener('input', e => { cmpState.input=e.target.value; e.target.style.height='auto'; e.target.style.height=Math.min(e.target.scrollHeight,120)+'px'; });
-  compareInput.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendCompare();} });
-  compareInput.addEventListener('focus', e => e.target.style.borderColor='var(--purple)');
-  compareInput.addEventListener('blur', e => e.target.style.borderColor='var(--border)');
-  const active = cmpState.input.trim()&&!cmpState.sending;
-  const btn = h('button',{style:{position:'absolute',right:'8px',top:'8px',width:'36px',height:'36px',borderRadius:'10px',border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',background:active?'var(--fg)':'var(--bg3)',color:active?'var(--bg)':'var(--fg3)'},onClick:sendCompare},
-    cmpState.sending?h('span',{className:'spinner'}):'↑');
-  wrap.appendChild(compareInput);
-  wrap.appendChild(btn);
-  inputArea.appendChild(wrap);
-  div.appendChild(inputArea);
-  setTimeout(()=>compareInput.focus(),100);
-  return div;
-}
-
-// Throttled compare update — max 4 updates/sec to avoid jank
-let cmpUpdateTimer = null;
-let cmpNeedsUpdate = false;
-
-function scheduleCompareUpdate() {
-  cmpNeedsUpdate = true;
-  if (cmpUpdateTimer) return;
-  cmpUpdateTimer = setTimeout(() => {
-    cmpUpdateTimer = null;
-    if (cmpNeedsUpdate) { cmpNeedsUpdate = false; doCompareUpdate(); }
-  }, 250);
-}
-
-function renderCardHTML(implId) {
-  const r = cmpState.results[implId];
-  let html = '';
-
-  // Status/loading
-  if (!r || r.status) {
-    const label = r?.status === 'searching' ? 'Searching files...' : 'Thinking...';
-    html += '<div style="display:flex;align-items:center;gap:8px;color:var(--fg3);font-size:12px;padding:20px;justify-content:center"><span class="spinner"></span>'+label+'</div>';
-  } else {
-    // Tool calls
-    (r.toolCalls||[]).forEach(tc => {
-      html += '<div style="margin-bottom:8px;border:1px solid var(--bg3);border-radius:8px;overflow:hidden">';
-      html += '<div style="padding:4px 8px;background:rgba(0,0,0,0.2);color:var(--fg2);display:flex;align-items:center;gap:6px;font-size:11px">';
-      html += '<span style="color:var(--purple)">▶</span>';
-      html += '<code style="color:var(--purple)">'+(tc.name||'tool')+'</code>';
-      if (tc.result) {
-        html += '<span style="margin-left:auto;color:var(--green);font-family:monospace;font-weight:600;font-size:10px">'+fmt(tc.result.elapsed)+' · '+tc.result.matchCount+' hits</span>';
-      } else {
-        html += '<span class="spinner" style="margin-left:auto"></span>';
-      }
-      html += '</div>';
-      if (tc.result?.preview) {
-        html += '<div style="max-height:100px;overflow-y:auto;font-size:11px;font-family:monospace">';
-        tc.result.preview.slice(0,6).forEach(l => {
-          const p = l.split(':');
-          const f = (p[0]||'').split('/').pop()||'';
-          const n = p[1]||'';
-          const c = p.slice(2).join(':').replace(/</g,'&lt;');
-          html += '<div class="tc-line"><span class="tc-f">'+f+'</span><span class="tc-n">'+n+'</span><span class="tc-c">'+c+'</span></div>';
-        });
-        html += '</div>';
-      }
-      html += '</div>';
-    });
-    // Text content
-    if (r.content) {
-      const safe = r.content.slice(0,600).replace(/</g,'&lt;').replace(/\n/g,'<br>') + (r.content.length>600?'...':'');
-      html += '<div style="font-size:12px;line-height:1.5;color:var(--fg2);margin-top:6px">'+safe+'</div>';
-    }
-  }
-  return html;
-}
-
-function renderCardHeaderHTML(implId) {
-  const r = cmpState.results[implId];
-  const modelName = r?.modelName || implId.split('/').pop();
-  const col = r?.fastest ? 'var(--green)' : 'var(--purple)';
-  let html = '<span style="font-size:12px;font-weight:600;color:'+col+'">'+modelName+'</span>';
-  if (r?.stats) {
-    const col = r.fastest ? 'var(--green)' : 'var(--fg3)';
-    html += '<span style="font-size:11px;font-family:monospace;color:'+col+';margin-left:4px">'+fmt(r.stats.totalMs)+'</span>';
-    html += '<span style="margin-left:auto;font-size:10px;color:var(--fg3)">'+r.stats.inTokens+'+'+r.stats.outTokens+' tok</span>';
-    if (r.stats.cost) html += '<span style="font-size:10px;font-weight:600;color:var(--green);margin-left:6px">$'+r.stats.cost.toFixed(5)+'</span>';
-  }
-  if (r?.fastest) html += '<span style="font-size:10px;font-weight:700;color:var(--green);margin-left:6px">FASTEST</span>';
-  return html;
-}
-
-function initCompareGrid() {
-  const area = document.getElementById('compare-results');
-  if (!area) return;
-  area.innerHTML = '';
-  if (cmpState.userMsg) {
-    area.innerHTML = '<div style="margin-bottom:16px;padding:10px 14px;background:var(--fg);color:var(--bg);border-radius:12px;max-width:70%;margin-left:auto;font-size:14px">'+cmpState.userMsg.replace(/</g,'&lt;')+'</div>';
-  }
-  const resultKeys = Object.keys(cmpState.results);
-  const cols = resultKeys.length <= 2 ? '1fr 1fr' : resultKeys.length <= 4 ? '1fr 1fr' : '1fr 1fr 1fr';
-  let gridHTML = '<div id="compare-grid" style="display:grid;grid-template-columns:'+cols+';gap:12px">';
-  resultKeys.forEach(id => {
-    const r = cmpState.results[id];
-    const col = r?.fastest ? 'var(--green)' : 'var(--purple)';
-    const safeId = id.replace(/[^a-zA-Z0-9]/g, '_');
-    gridHTML += '<div id="cmp-card-'+safeId+'" style="border-radius:12px;border:1px solid var(--border);overflow:hidden;background:var(--bg2);transition:border-color 0.3s">';
-    gridHTML += '<div id="cmp-head-'+safeId+'" style="display:flex;align-items:center;gap:6px;padding:8px 12px;border-bottom:1px solid var(--bg3);border-top:2px solid '+col+'">'+renderCardHeaderHTML(id)+'</div>';
-    gridHTML += '<div id="cmp-body-'+safeId+'" style="padding:10px;max-height:350px;overflow-y:auto">'+renderCardHTML(id)+'</div>';
-    gridHTML += '</div>';
-  });
-  gridHTML += '</div>';
-  area.innerHTML += gridHTML;
-}
-
-function doCompareUpdate() {
-  if (!document.getElementById('compare-grid')) {
-    initCompareGrid();
-    return;
-  }
-  Object.keys(cmpState.results).forEach(id => {
-    const r = cmpState.results[id];
-    const safeId = id.replace(/[^a-zA-Z0-9]/g, '_');
-    const card = document.getElementById('cmp-card-'+safeId);
-    if (!card) return;
-    card.style.borderColor = r?.fastest ? 'var(--green)' : 'var(--border)';
-    const head = document.getElementById('cmp-head-'+safeId);
-    if (head) head.innerHTML = renderCardHeaderHTML(id);
-    const body = document.getElementById('cmp-body-'+safeId);
-    if (body) body.innerHTML = renderCardHTML(id);
-  });
-}
-
-function updateCompareResults() {
-  // Force re-render the compare tab if it's active
-  if (state.tab === 'compare') {
-    const area = document.getElementById('compare-results');
-    if (area) {
-      area.innerHTML = '';
-      if (cmpState.userMsg) {
-        area.innerHTML = '<div style="margin-bottom:16px;padding:10px 14px;background:linear-gradient(135deg,var(--purple),#7c3aed);color:#fff;border-radius:12px;max-width:70%;margin-left:auto;font-size:14px">'+cmpState.userMsg.replace(/</g,'&lt;')+'</div>';
-      }
-      if (Object.keys(cmpState.results).length > 0) {
-        initCompareGrid();
-      }
-    }
-  }
-}
-
-async function sendCompare() {
-  if(compareInput) cmpState.input = compareInput.value;
-  if(!cmpState.input.trim()||cmpState.sending) return;
-  const content = cmpState.input.trim();
-  cmpState.userMsg = content;
-  cmpState.input = '';
-  if(compareInput) compareInput.value = '';
-  cmpState.sending = true;
-  cmpState.results = {};
-
-  // Race active MODELS (not servers) — each model gets its own card
-  const modelsToRace = state.activeModels.length > 0 ? state.activeModels : [state.model];
-  modelsToRace.forEach(mid => {
-    const m = state.models.find(x => x.id === mid);
-    cmpState.results[mid] = {status:'thinking',content:'',toolCalls:[],stats:null,done:false,fastest:false,modelName:m?.name||mid};
-  });
-  updateCompareResults();
-
-  let completedCount = 0;
-  const completionTimes = {};
-
-  await Promise.all(modelsToRace.map(async (modelId) => {
-    try {
-      const response = await fetch('/api/chat/stream', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({message:content, model:modelId, impl:state.impl, history:[]}),
-      });
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer='', tcs=[], text='';
-      while(true) {
-        const {done,value} = await reader.read();
-        if(!done) buffer+=decoder.decode(value,{stream:true}); else buffer+=decoder.decode();
-        const lines=buffer.split('\n'); buffer=done?'':lines.pop();
-        let evt=null;
-        for(const line of lines) {
-          if(line.startsWith('event: ')) evt=line.slice(7).trim();
-          else if(line.startsWith('data: ')&&evt) {
-            try {
-              const d=JSON.parse(line.slice(6));
-              if(evt==='status'){cmpState.results[modelId].status=d.type;updateCompareResults();}
-              else if(evt==='tool_call'){tcs.push({name:d.name,args:d.args,impl:d.impl,result:null});cmpState.results[modelId].toolCalls=[...tcs];cmpState.results[modelId].status='searching';updateCompareResults();}
-              else if(evt==='tool_result'){for(let i=tcs.length-1;i>=0;i--){if(!tcs[i].result){tcs[i].result={elapsed:d.elapsed,bytes:d.bytes,matchCount:d.matchCount,preview:d.preview};break;}}cmpState.results[modelId].toolCalls=[...tcs];cmpState.results[modelId].status='thinking';updateCompareResults();}
-              else if(evt==='text_delta'){text+=d.content;cmpState.results[modelId].content=text;cmpState.results[modelId].status=null;updateCompareResults();}
-              else if(evt==='text_done'){
-                cmpState.results[modelId].content=d.content;cmpState.results[modelId].stats=d.stats;cmpState.results[modelId].status=null;cmpState.results[modelId].done=true;
-                completionTimes[modelId]=d.stats?.totalMs||999999;completedCount++;
-                if(completedCount===modelsToRace.length){const fastest=Object.entries(completionTimes).sort((a,b)=>a[1]-b[1])[0][0];cmpState.results[fastest].fastest=true;}
-                updateCompareResults();
-              }
-            }catch{}
-            evt=null;
-          }
-        }
-        if(done) break;
-      }
-    } catch(err) {
-      cmpState.results[modelId].content='Error: '+err.message;cmpState.results[modelId].status=null;cmpState.results[modelId].done=true;completedCount++;updateCompareResults();
-    }
-  }));
-  cmpState.sending=false; updateCompareResults();
 }
 
 // ═══ API TAB — OpenAPI spec upload, search, and race ═══
@@ -2122,6 +2432,335 @@ function updateWarpStatus(text, sub) {
 }
 
 function stopWarp() { /* no-op for CSS animation */ }
+
+// ═══ COCKPIT TAB — Mission Control for code analysis ═══
+let cockpitState = {
+  repo: 'https://github.com/walter-grace/milli-agent',
+  running: false,
+  steps: [],          // [{name,label,status,elapsed,findings,text,progress}]
+  findings: [],       // [{scan,file,line,severity}]
+  scores: null,       // {security,quality,complexity,performance,maintainability,trust}
+  complete: null,     // {totalFindings,grade,repoPath}
+  selectedFile: null,
+};
+
+const SCORE_DEFS = [
+  { key:'security',        icon:'🛡', label:'Security',        color:'#ef4444' },
+  { key:'quality',         icon:'✨', label:'Quality',         color:'#8b5cf6' },
+  { key:'complexity',      icon:'🧩', label:'Complexity',      color:'#3b82f6' },
+  { key:'performance',     icon:'⚡', label:'Performance',     color:'#f59e0b' },
+  { key:'maintainability', icon:'🔧', label:'Maintainability', color:'#22c55e' },
+  { key:'trust',           icon:'🎯', label:'Trust',           color:'#ec4899' },
+];
+
+function gradeFor(score) {
+  if (score >= 90) return 'A+';
+  if (score >= 80) return 'A';
+  if (score >= 70) return 'B';
+  if (score >= 60) return 'C';
+  return 'D';
+}
+
+function renderCockpit() {
+  const main = h('div',{style:{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden',background:'var(--bg)'}});
+
+  // ── Top bar ─────────────────────────────────────────────────────────
+  const top = h('div',{style:{padding:'18px 24px',borderBottom:'1px solid var(--border)',flexShrink:0}});
+  top.appendChild(h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'4px'}},
+    h('span',{style:{fontSize:'18px'}},'🛩'),
+    h('h2',{style:{fontSize:'16px',fontWeight:700,margin:0}},'Mission Control'),
+    h('span',{style:{fontSize:'11px',color:'var(--fg3)',padding:'2px 8px',borderRadius:'10px',background:'var(--bg2)'}},'unified cockpit for code'),
+  ));
+  top.appendChild(h('p',{style:{fontSize:'12px',color:'var(--fg3)',margin:'0 0 12px 0'}},
+    'Drop a GitHub URL — runs all scanners in parallel, streams scores and findings live.'));
+
+  const row = h('div',{style:{display:'flex',gap:'8px'}});
+  const input = document.createElement('input');
+  input.className = 'sinput';
+  input.placeholder = 'GitHub URL or owner/repo...';
+  input.value = cockpitState.repo;
+  input.style.cssText = 'flex:1;font-size:14px;';
+  input.addEventListener('input', e => cockpitState.repo = e.target.value);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') runCockpitAnalysis(); });
+
+  const launchBtn = h('button',{className:'sbtn',
+    style:{padding:'12px 28px',fontSize:'14px',fontWeight:700,background:cockpitState.running?'var(--bg3)':'#8b5cf6',color:'#fff'},
+    onClick:runCockpitAnalysis},
+    cockpitState.running ? 'Analyzing...' : '🚀 Launch');
+  row.append(input, launchBtn);
+  top.appendChild(row);
+
+  // Preset chips
+  const presets = h('div',{style:{display:'flex',flexWrap:'wrap',gap:'6px',marginTop:'10px'}});
+  [
+    ['Milli-Agent','walter-grace/milli-agent'],
+    ['Express','expressjs/express'],
+    ['FastAPI','tiangolo/fastapi'],
+    ['Next.js','vercel/next.js'],
+  ].forEach(([label, repo]) => {
+    presets.appendChild(h('button',{className:'pre',onClick:()=>{ cockpitState.repo='https://github.com/'+repo; input.value=cockpitState.repo; }},label));
+  });
+  top.appendChild(presets);
+  main.appendChild(top);
+
+  // ── Body grid: left=stream, center=scores, right=findings ───────────
+  const grid = h('div',{id:'cockpit-grid',style:{
+    flex:1,
+    display:'grid',
+    gridTemplateColumns:'260px 1fr 320px',
+    gap:'12px',
+    padding:'12px',
+    overflow:'hidden',
+    minHeight:0,
+  }});
+
+  // Left: live stream
+  const leftPanel = h('div',{style:{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:'10px',display:'flex',flexDirection:'column',overflow:'hidden',minHeight:0}});
+  leftPanel.appendChild(h('div',{style:{padding:'10px 14px',borderBottom:'1px solid var(--border)',fontSize:'11px',fontWeight:700,color:'var(--fg2)',textTransform:'uppercase',letterSpacing:'.5px'}},'⟳ Live Activity'));
+  const streamBody = h('div',{id:'cockpit-stream',style:{flex:1,overflowY:'auto',padding:'8px'}});
+  leftPanel.appendChild(streamBody);
+  grid.appendChild(leftPanel);
+
+  // Center: score cards + summary
+  const centerPanel = h('div',{style:{display:'flex',flexDirection:'column',gap:'12px',overflow:'hidden',minHeight:0}});
+  const summaryBar = h('div',{id:'cockpit-summary',style:{minHeight:'70px'}});
+  centerPanel.appendChild(summaryBar);
+  const scoreGrid = h('div',{id:'cockpit-scores',style:{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'10px'}});
+  centerPanel.appendChild(scoreGrid);
+  const codePane = h('div',{id:'cockpit-codepane',style:{flex:1,background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:'10px',overflow:'hidden',display:'flex',flexDirection:'column',minHeight:0}});
+  codePane.appendChild(h('div',{style:{padding:'10px 14px',borderBottom:'1px solid var(--border)',fontSize:'11px',fontWeight:700,color:'var(--fg2)',textTransform:'uppercase',letterSpacing:'.5px'}},'📄 Code Viewer'));
+  codePane.appendChild(h('div',{id:'cockpit-code-body',style:{flex:1,overflowY:'auto',padding:'14px',fontSize:'12px',fontFamily:'JetBrains Mono,monospace',color:'var(--fg3)'}},'Click a finding on the right to inspect.'));
+  centerPanel.appendChild(codePane);
+  grid.appendChild(centerPanel);
+
+  // Right: findings list
+  const rightPanel = h('div',{style:{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:'10px',display:'flex',flexDirection:'column',overflow:'hidden',minHeight:0}});
+  rightPanel.appendChild(h('div',{style:{padding:'10px 14px',borderBottom:'1px solid var(--border)',fontSize:'11px',fontWeight:700,color:'var(--fg2)',textTransform:'uppercase',letterSpacing:'.5px',display:'flex',justifyContent:'space-between'}},
+    h('span',null,'⚠ Findings'),
+    h('span',{id:'cockpit-finding-count',style:{color:'var(--fg3)'}},'0'),
+  ));
+  const findingsBody = h('div',{id:'cockpit-findings',style:{flex:1,overflowY:'auto',padding:'6px'}});
+  rightPanel.appendChild(findingsBody);
+  grid.appendChild(rightPanel);
+
+  main.appendChild(grid);
+
+  // Render any existing state
+  setTimeout(() => {
+    renderCockpitStream();
+    renderCockpitScores();
+    renderCockpitFindings();
+    renderCockpitSummary();
+  }, 0);
+
+  return main;
+}
+
+function renderCockpitStream() {
+  const el = document.getElementById('cockpit-stream');
+  if (!el) return;
+  el.innerHTML = '';
+  if (cockpitState.steps.length === 0) {
+    el.appendChild(h('div',{style:{textAlign:'center',padding:'30px 10px',color:'var(--fg3)',fontSize:'12px'}},'Waiting for launch…'));
+    return;
+  }
+  cockpitState.steps.forEach(step => {
+    const color = step.status === 'done' ? 'var(--green)' : step.status === 'error' ? '#ef4444' : '#f59e0b';
+    const icon = step.status === 'done' ? '✓' : step.status === 'error' ? '✗' : '⟳';
+    const card = h('div',{style:{padding:'8px 10px',borderRadius:'8px',marginBottom:'6px',background:'var(--bg)',border:'1px solid var(--bg3)',display:'flex',alignItems:'center',gap:'8px',fontSize:'11px'}});
+    card.appendChild(h('span',{style:{color,fontWeight:700,width:'12px'}},icon));
+    card.appendChild(h('span',{style:{flex:1,color:'var(--fg2)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},step.label));
+    if (step.elapsed) card.appendChild(h('span',{style:{fontFamily:'monospace',color:'var(--fg3)',fontSize:'10px'}},step.elapsed+'ms'));
+    if (step.findings > 0) card.appendChild(h('span',{style:{padding:'1px 6px',borderRadius:'5px',background:'rgba(239,68,68,0.15)',color:'#ef4444',fontSize:'10px',fontWeight:700}},step.findings));
+    el.appendChild(card);
+  });
+}
+
+function renderCockpitScores() {
+  const el = document.getElementById('cockpit-scores');
+  if (!el) return;
+  el.innerHTML = '';
+  SCORE_DEFS.forEach(def => {
+    const score = cockpitState.scores ? cockpitState.scores[def.key] : null;
+    const grade = score != null ? gradeFor(score) : '—';
+    const card = h('div',{style:{
+      background:'var(--bg2)',
+      border:'1px solid var(--border)',
+      borderRadius:'10px',
+      padding:'14px',
+      display:'flex',
+      flexDirection:'column',
+      gap:'4px',
+      transition:'all .2s',
+      borderLeft:'3px solid '+def.color,
+    }});
+    card.appendChild(h('div',{style:{display:'flex',alignItems:'center',gap:'6px',fontSize:'11px',color:'var(--fg3)',textTransform:'uppercase',fontWeight:700,letterSpacing:'.5px'}},
+      h('span',null,def.icon),
+      h('span',null,def.label),
+    ));
+    card.appendChild(h('div',{style:{display:'flex',alignItems:'baseline',gap:'8px'}},
+      h('span',{style:{fontSize:'28px',fontWeight:800,fontFamily:'monospace',color:score!=null?def.color:'var(--fg3)'}},grade),
+      h('span',{style:{fontSize:'13px',color:'var(--fg2)',fontFamily:'monospace'}},score!=null ? score+'/100' : ''),
+    ));
+    el.appendChild(card);
+  });
+}
+
+function renderCockpitFindings() {
+  const el = document.getElementById('cockpit-findings');
+  const countEl = document.getElementById('cockpit-finding-count');
+  if (!el) return;
+  el.innerHTML = '';
+  if (countEl) countEl.textContent = String(cockpitState.findings.length);
+  if (cockpitState.findings.length === 0) {
+    el.appendChild(h('div',{style:{textAlign:'center',padding:'30px 10px',color:'var(--fg3)',fontSize:'12px'}},'No findings yet'));
+    return;
+  }
+  cockpitState.findings.forEach(f => {
+    const sevColor = f.severity === 'warn' ? '#f59e0b' : '#3b82f6';
+    const fileName = f.file.split('/').pop();
+    const card = h('div',{style:{padding:'8px 10px',borderRadius:'7px',marginBottom:'4px',background:'var(--bg)',border:'1px solid var(--bg3)',cursor:'pointer',fontSize:'11px',transition:'background .1s'},
+      onClick:()=>openCockpitFile(f.file, f.line)});
+    card.addEventListener('mouseenter',()=>card.style.background='var(--bg3)');
+    card.addEventListener('mouseleave',()=>card.style.background='var(--bg)');
+    card.appendChild(h('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginBottom:'2px'}},
+      h('span',{style:{width:'6px',height:'6px',borderRadius:'50%',background:sevColor,flexShrink:0}}),
+      h('span',{style:{color:'var(--fg)',fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},fileName),
+      h('span',{style:{color:'var(--fg3)',fontFamily:'monospace',fontSize:'10px'}},'L'+f.line),
+    ));
+    card.appendChild(h('div',{style:{color:'var(--fg3)',fontSize:'10px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},f.scan));
+    el.appendChild(card);
+  });
+}
+
+function renderCockpitSummary() {
+  const el = document.getElementById('cockpit-summary');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!cockpitState.complete) {
+    if (cockpitState.running) {
+      el.appendChild(h('div',{style:{padding:'18px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:'10px',display:'flex',alignItems:'center',gap:'14px'}},
+        h('span',{className:'spinner'}),
+        h('div',null,
+          h('div',{style:{fontSize:'13px',fontWeight:700}},'Analysis in progress'),
+          h('div',{style:{fontSize:'11px',color:'var(--fg3)'}},cockpitState.steps.filter(s=>s.status==='done').length+' / '+cockpitState.steps.length+' scans complete'),
+        ),
+      ));
+    } else {
+      el.appendChild(buildMissionCard());
+    }
+    return;
+  }
+  const c = cockpitState.complete;
+  const gradeColor = c.grade === 'A+' || c.grade === 'A' ? '#22c55e' : c.grade === 'B' ? '#3b82f6' : c.grade === 'C' ? '#f59e0b' : '#ef4444';
+  el.appendChild(h('div',{style:{padding:'18px 22px',background:'var(--bg2)',border:'2px solid '+gradeColor,borderRadius:'12px',display:'flex',alignItems:'center',gap:'18px'}},
+    h('div',{style:{fontSize:'42px',fontWeight:800,color:gradeColor,fontFamily:'monospace',lineHeight:1}},c.grade),
+    h('div',{style:{flex:1}},
+      h('div',{style:{fontSize:'14px',fontWeight:700}},'Mission complete'),
+      h('div',{style:{fontSize:'11px',color:'var(--fg3)'}},c.totalFindings+' findings across '+c.scanCount+' scans'),
+    ),
+    h('div',{style:{fontSize:'10px',color:'var(--fg3)',fontFamily:'monospace',textAlign:'right'}},
+      h('div',null,c.repoPath || ''),
+    ),
+  ));
+}
+
+async function openCockpitFile(filePath, lineNum) {
+  const body = document.getElementById('cockpit-code-body');
+  if (!body) return;
+  body.textContent = 'Loading ' + filePath + '…';
+  try {
+    const resp = await fetch('/api/file/read', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ path: filePath, start_line: Math.max(1, lineNum - 30), end_line: lineNum + 30 })
+    });
+    const data = await resp.json();
+    body.innerHTML = '';
+    const header = h('div',{style:{fontSize:'11px',color:'var(--fg2)',marginBottom:'8px',fontWeight:700}},filePath + '  ·  L' + lineNum);
+    body.appendChild(header);
+    const pre = h('pre',{style:{margin:0,whiteSpace:'pre',fontSize:'11px',lineHeight:'1.6',color:'var(--fg2)'}});
+    pre.textContent = data.content || data.text || '(empty)';
+    body.appendChild(pre);
+  } catch (e) {
+    body.textContent = 'Failed: ' + e.message;
+  }
+}
+
+async function runCockpitAnalysis() {
+  if (cockpitState.running || !cockpitState.repo.trim()) return;
+  cockpitState.running = true;
+  cockpitState.steps = [];
+  cockpitState.findings = [];
+  cockpitState.scores = null;
+  cockpitState.complete = null;
+  currentTab = null; render();
+
+  let repo = cockpitState.repo.trim();
+  const ghMatch = repo.match(/github\.com\/([^\/\s]+\/[^\/\s]+)/);
+  if (ghMatch) repo = ghMatch[1];
+
+  try {
+    const response = await fetch('/api/cockpit/analyze', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(repo.startsWith('/') ? { path: repo } : { repo }),
+    });
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let leftover = '';
+    const dispatch = (evt, d) => {
+      if (evt === 'step') {
+        const existing = cockpitState.steps.find(s => s.name === d.name);
+        if (existing) Object.assign(existing, d);
+        else cockpitState.steps.push(d);
+        renderCockpitStream();
+        renderCockpitSummary();
+      } else if (evt === 'finding') {
+        cockpitState.findings.push(d);
+        renderCockpitFindings();
+      } else if (evt === 'scores') {
+        cockpitState.scores = d;
+        renderCockpitScores();
+      } else if (evt === 'complete') {
+        cockpitState.complete = d;
+        cockpitState.scores = d.scores || cockpitState.scores;
+        renderCockpitScores();
+        renderCockpitSummary();
+      }
+    };
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) leftover += decoder.decode(value, { stream: true });
+      if (done) leftover += decoder.decode();
+      // Parse complete \n\n-delimited SSE event blocks
+      let idx;
+      while ((idx = leftover.indexOf('\n\n')) !== -1) {
+        const block = leftover.slice(0, idx);
+        leftover = leftover.slice(idx + 2);
+        let evt = null, data = null;
+        for (const line of block.split('\n')) {
+          if (line.startsWith('event: ')) evt = line.slice(7).trim();
+          else if (line.startsWith('data: ')) data = line.slice(6);
+        }
+        if (evt && data) {
+          try { dispatch(evt, JSON.parse(data)); } catch {}
+        }
+      }
+      if (done) break;
+      // Yield to the browser so DOM updates paint between bursts
+      await new Promise(r => setTimeout(r, 0));
+    }
+  } catch (e) {
+    cockpitState.steps.push({ name:'error', status:'error', label:'Failed: '+e.message });
+    renderCockpitStream();
+  }
+
+  cockpitState.running = false;
+  // Re-render the launch button label
+  const oldGrid = document.getElementById('cockpit-grid');
+  if (oldGrid) {
+    currentTab = null; render();
+  }
+}
 
 // ═══ WHITEHAT TAB — One-click security audit ═══
 let whState = { repo: 'https://github.com/walter-grace/milli-agent', scanning: false, steps: [], complete: null };
@@ -2472,6 +3111,30 @@ function checkModelHealth() {
 checkModelHealth();
 setInterval(checkModelHealth, 60000);
 render();
+
+// ─── QA debug handle (used by qa/run-*.mjs and any browser eval) ───
+// Module-scoped vars aren't on window. This exposes the bits a test needs to read.
+window.__milli = {
+  get state() { return state; },
+  get cockpitState() { return cockpitState; },
+  get availableContext() { return availableContext; },
+  refreshContextStrip: () => refreshContextStrip(),
+  attachCodeButtons: (el) => attachCodeButtons(el),
+  render: () => render(),
+  runCockpitAnalysis: () => runCockpitAnalysis(),
+
+  // Inject a fake assistant message so tests don't depend on LLM output reliability.
+  // Renders through the same code path real responses use → mdToHtml + attachCodeButtons.
+  injectAssistantMessage(content, { userPrompt = 'test prompt' } = {}) {
+    chatAddUserMsg(userPrompt);
+    chatStartAssistant();
+    state.msgs.push({ role: 'user', content: userPrompt });
+    state.msgs.push({ role: 'assistant', content, toolCalls: [], stats: null });
+    chatAppendText(content);
+    // Force the throttled bubble update to fire immediately
+    setTimeout(() => chatFinish({ totalMs: 0, toolCalls: 0, mcpMs: 0, inTokens: 0, outTokens: 0 }), 100);
+  },
+};
 </script>
 </body>
 </html>
